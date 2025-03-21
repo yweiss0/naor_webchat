@@ -6,41 +6,84 @@
     let isChatOpen = false;
     let isLoading = false;
     let messageInput = '';
-    let messages = [
-        {
-            role: 'assistant',
-            content: 'How can I help you?'
-        }
-    ];
+    let typingMessageId = null;
+    let messages = [];
+    let messagesContainer;
+    let lastScrollPosition = 0;
+    let userScrolledUp = false;
+    let scrollTimeout;
 
     function openChat() {
         isChatOpen = !isChatOpen;
     }
     
 
+    async function typeMessage(content, messageId) {
+        const message = messages.find(m => m.id === messageId);
+        let index = 0;
+        
+        while (index < content.length) {
+            message.content = content.slice(0, index + 1);
+            messages = messages;
+            index++;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+    }
+
+
     async function handleSubmit(event) {
         event.preventDefault();
-        if (messageInput.trim()) {
-            isLoading = true; // Start loading
-            let userMessage = { role: 'user', content: messageInput.trim() };
-            messages = [...messages, userMessage];
-            messageInput = ''; // Clear input
-
+        if (messageInput.trim() && !isLoading) {
+            isLoading = true;
+            const userMessage = {
+                id: Date.now(),
+                role: 'user',
+                content: messageInput.trim()
+            };
+            
+            // Add temporary thinking message
+            const thinkingMessage = {
+                id: Date.now() + 1,
+                role: 'assistant',
+                content: 'Thinking...',
+                status: 'thinking'
+            };
+            
+            messages = [...messages, userMessage, thinkingMessage];
+            messageInput = '';
+            
             try {
                 const response = await fetch('http://localhost:8000/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: userMessage.content }),
                 });
-
+                
                 const data = await response.json();
-                let aiMessage = { role: 'assistant', content: data.response };
+                const aiMessage = {
+                    id: Date.now() + 2,
+                    role: 'assistant',
+                    content: '',
+                    status: 'typing'
+                };
+                
+                // Replace thinking message with typing message
+                messages = messages.filter(m => m.id !== thinkingMessage.id);
                 messages = [...messages, aiMessage];
+                typingMessageId = aiMessage.id;
+                
+                // Start typing animation
+                await typeMessage(data.response, aiMessage.id);
+                
             } catch (error) {
-                console.error('Error sending message:', error);
-                messages = [...messages, { role: 'assistant', content: "Sorry, something went wrong." }];
+                console.error('Error:', error);
+                messages = [...messages, {
+                    role: 'assistant',
+                    content: 'Sorry, something went wrong.'
+                }];
             } finally {
-                isLoading = false; // Stop loading
+                isLoading = false;
+                typingMessageId = null;
             }
         }
     }
@@ -86,6 +129,31 @@
         
         return formatted;
     }
+    // Add auto-scroll handler
+    async function maintainScrollPosition() {
+        await tick();
+        if (!messagesContainer) return;
+        
+        // Check if user has manually scrolled up
+        const threshold = 100;
+        const atBottom = messagesContainer.scrollHeight - messagesContainer.clientHeight <= messagesContainer.scrollTop + threshold;
+        
+        if (atBottom || !userScrolledUp) {
+            messagesContainer.scrollTo({
+                top: messagesContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+            userScrolledUp = false;
+        }
+    }
+
+    // Track scroll events
+    function handleScroll() {
+        const fromBottom = messagesContainer.scrollHeight - 
+                         messagesContainer.scrollTop - 
+                         messagesContainer.clientHeight;
+        userScrolledUp = fromBottom > 100;
+    }
 </script>
 
 <button class="fixed bottom-5 right-5 rounded-full bg-black text-white p-3" on:click={openChat}>
@@ -107,7 +175,7 @@
       <h2 class="font-semibold text-lg tracking-tight">Chatbot</h2>
     </div>
 
-    <div class="pr-4 flex-1 overflow-y-auto">
+    <div class="pr-4 flex-1 overflow-y-auto" bind:this={messagesContainer} on:scroll={handleScroll}>
       {#each messages as message}
       {#if message.role === 'user'}
        <!-- User message aligned to left -->
@@ -124,25 +192,42 @@
               {message.content}
           </p>
       </div>
-          {:else}
-          <!-- AI message aligned to right -->
-          <div class="flex flex-row-reverse gap-3 my-4 text-gray-600 text-sm ml-auto max-w-[80%]">
-              <span class="relative flex shrink-0 overflow-hidden rounded-full w-8 h-8">
-                  <div class="rounded-full bg-gray-100 border p-1">
-                      <svg fill="black" viewBox="0 0 24 24" height="20" width="20">
-                          <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"></path>
-                      </svg>
+      {:else}
+            <div class="flex flex-row-reverse gap-3 my-4 text-gray-600 text-sm ml-auto max-w-[80%]">
+                <span class="relative flex shrink-0 overflow-hidden rounded-full w-8 h-8">
+                    {#if message.status === 'thinking'}
+                        <!-- Spinner -->
+                        <div class="rounded-full bg-gray-100 border p-1">
+                            <svg class="animate-spin size-5 text-gray-600" viewBox="0 0 24 24">
+                                <path fill="currentColor" d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12,20Z" opacity="0.25"/>
+                                <path fill="currentColor" d="M12,4a8,8,0,0,1,7.89,6.7A1.53,1.53,0,0,0,21.38,12h0a1.5,1.5,0,0,0,1.48-1.75,11,11,0,0,0-21.72,0A1.5,1.5,0,0,0,2.62,12h0a1.53,1.53,0,0,0,1.49-1.3A8,8,0,0,1,12,4Z"/>
+                            </svg>
+                        </div>
+                    {:else}
+                        <!-- AI Icon -->
+                        <div class="rounded-full bg-gray-100 border p-1">
+                            <svg fill="black" viewBox="0 0 24 24" height="20" width="20">
+                                <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
+                            </svg>
+                        </div>
+                    {/if}
+                </span>
+          
+          <p class="leading-relaxed bg-blue-50 p-3 rounded-lg shadow-sm ml-2 w-full">
+              <span class="block font-bold text-gray-700 text-right">AI </span>
+              {#if message.status === 'thinking'}
+                  <div class="text-gray-500 italic">
+                      {message.content}
                   </div>
-              </span>
-              <div class="leading-relaxed bg-blue-50 p-3 rounded-lg shadow-sm ml-2 w-full">
-                <span class="block font-bold text-gray-700 text-right">AI </span>
-                <div class="text-left">
-                    {@html formatResponse(message.content)}
-                </div>
-            </div>
-          </div>
-          {/if}
-      {/each}
+              {:else}
+                  <div class="text-left">
+                      {@html formatResponse(message.content)}
+                  </div>
+              {/if}
+          </p>
+      </div>
+  {/if}
+{/each}
     </div>
 
     <form class="flex items-center pt-0" on:submit={handleSubmit}>
