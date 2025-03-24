@@ -21,6 +21,9 @@
             chatInitialized = true; // Mark as initialized
         }
     }
+    function closeChat() {
+    isChatOpen = false;
+    }
     
 
     async function typeMessage(content, messageId) {
@@ -190,13 +193,18 @@
 
 {#if isChatOpen}
     <div 
-    class="fixed bottom-24 right-0 mr-4 bg-white p-6 rounded-lg border border-[#e5e7eb] w-[440px] h-[450px] lg:h-[550px] flex flex-col z-50"
+    class="fixed bottom-5 right-0 mr-4 bg-white p-6 rounded-lg border border-[#e5e7eb] w-[440px] h-[450px] lg:h-[550px] flex flex-col z-50"
     style="box-shadow: 0 0 #0000, 0 0 #0000, 0 1px 2px 0 rgb(0 0 0 / 0.05);"
     >
         <div class="flex flex-col space-y-1.5 pb-6">
         <h2 class="font-semibold text-lg tracking-tight">Chatbot</h2>
         </div>
-
+        <button 
+            class="absolute top-2 right-2 text-gray-500 hover:text-red-500 text-xl"
+            on:click={closeChat}
+        >
+            &times;
+        </button>
         <div class="pr-4 flex-1 overflow-y-auto" bind:this={messagesContainer} on:scroll={handleScroll}>
         {#each messages as message}
             {#if message.role === 'user'}
