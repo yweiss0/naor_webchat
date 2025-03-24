@@ -1,4 +1,296 @@
-from fastapi import FastAPI, HTTPException
+# from fastapi import FastAPI, HTTPException
+# from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel
+# import yfinance as yf
+# from openai import OpenAI
+# from dotenv import load_dotenv
+# import os
+# import json
+
+# # Load environment variables
+# load_dotenv()
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# if not OPENAI_API_KEY:
+#     raise ValueError("OPENAI_API_KEY not found in environment variables!")
+
+# # Initialize OpenAI client
+# client = OpenAI(api_key=OPENAI_API_KEY)
+
+# # Initialize FastAPI app
+# app = FastAPI()
+
+# # CORS configuration
+# origins = [
+#     "http://localhost:5173",  # Local dev
+#     "https://localhost",  # Replace with your WordPress domain
+#     "*",  # Temporary wildcard; refine for production
+# ]
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+
+# class QueryRequest(BaseModel):
+#     message: str
+
+
+# def get_stock_price(ticker: str) -> str:
+#     try:
+#         stock = yf.Ticker(ticker.upper())
+#         price = stock.history(period="1d")["Close"].iloc[-1]
+#         return str(round(price, 2))
+#     except Exception as e:
+#         return f"Error fetching price for {ticker}: {str(e)}"
+
+
+# stock_price_function = {
+#     "type": "function",
+#     "name": "get_stock_price",
+#     "description": "Get the most recent closing price of a stock by its ticker symbol using Yahoo Finance data",
+#     "parameters": {
+#         "type": "object",
+#         "properties": {
+#             "ticker": {
+#                 "type": "string",
+#                 "description": "The stock ticker symbol (e.g., AAPL for Apple)",
+#             }
+#         },
+#         "required": ["ticker"],
+#         "additionalProperties": False,
+#     },
+# }
+
+
+# def is_related_to_stocks_crypto(query: str) -> bool:
+#     # Keywords related to finance
+#     keywords = [
+#         "stock",
+#         "stocks",
+#         "crypto",
+#         "cryptocurrency",
+#         "trade",
+#         "trading",
+#         "market",
+#         "price",
+#         "invest",
+#         "investment",
+#         "bitcoin",
+#         "ethereum",
+#         "portfolio",
+#         "bull",
+#         "bear",
+#         "exchange",
+#         "gold",
+#         "XAUUSD",
+#     ]
+#     # Company/business-related keywords
+#     company_keywords = [
+#         "company",
+#         "business",
+#         "corporation",
+#         "inc",
+#         "ltd",
+#         "information",
+#         "operations",
+#         "industry",
+#         "revenue",
+#         "products",
+#         "services",
+#     ]
+#     # Well-known companies with stocks
+#     known_companies = [
+#         "tesla",
+#         "apple",
+#         "microsoft",
+#         "google",
+#         "amazon",
+#         "facebook",
+#         "nvidia",
+#         "coinbase",
+#         "binance",
+#         "netflix",
+#         "ford",
+#         "gm",
+#         "boeing",
+#         "hp",
+#     ]
+
+#     query_lower = query.lower()
+
+#     # Check direct financial keywords
+#     if any(keyword in query_lower for keyword in keywords):
+#         return True
+
+#     # Check company-related keywords
+#     if any(keyword in query_lower for keyword in company_keywords):
+#         words = query.split()
+#         potential_companies = [
+#             word for word in words if word[0].isupper() and len(word) > 2
+#         ]
+#         for company in potential_companies:
+#             try:
+#                 ticker = yf.Ticker(company.upper())
+#                 if ticker.info and "symbol" in ticker.info:
+#                     return True
+#             except Exception:
+#                 pass
+
+#     # Check well-known companies
+#     if any(company in query_lower for company in known_companies):
+#         return True
+
+#     return False
+
+
+# # Function to process text with Markdown-like formatting
+# def process_text(text):
+#     # Split text into lines for processing
+#     lines = text.split("\n")
+#     processed_lines = []
+
+#     for line in lines:
+#         if not line.strip():
+#             # Preserve empty lines as breaks
+#             processed_lines.append("<br>")
+#             continue
+
+#             # Handle headings
+#         if line.startswith("### "):
+#             line = f"<h3>{line[4:].strip()}</h3>"
+#         elif line.startswith("## "):
+#             line = f"<h2>{line[3:].strip()}</h2>"
+#         elif line.startswith("# "):
+#             line = f"<h1>{line[2:].strip()}</h1>"
+#         else:
+#             # Wrap non-heading lines in a paragraph tag for consistency
+#             line = f"<p>{line.strip()}</p>"
+
+#             # Process inline Markdown within the line
+#             # Bold (**text** or __text__)
+#         while "**" in line:
+#             line = line.replace("**", "<b>", 1).replace("**", "</b>", 1)
+#         while "__" in line:
+#             line = line.replace("__", "<b>", 1).replace("__", "</b>", 1)
+
+#             # Italics (*text* or _text_)
+#         while "*" in line and line.count("*") >= 2:
+#             line = line.replace("*", "<i>", 1).replace("*", "</i>", 1)
+#         while (
+#             "_" in line and line.count("_") >= 2 and "__" not in line
+#         ):  # Avoid conflict with bold
+#             line = line.replace("_", "<i>", 1).replace("_", "</i>", 1)
+
+#         processed_lines.append(line)
+
+#         # Join lines with breaks where needed
+#     return "".join(processed_lines)
+
+
+# @app.post("/chat")
+# async def chat(query: QueryRequest):
+#     user_query = query.message
+#     print(f"Received query: {user_query}")
+
+#     # Check if query is related to finance
+#     if not is_related_to_stocks_crypto(user_query):
+#         return {
+#             "response": "I can only answer questions about stocks, cryptocurrency, or trading. Please ask about one of those topics!"
+#         }
+
+#     # Initial call to OpenAI
+#     response = client.responses.create(
+#         model="gpt-4o-mini",
+#         input=f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the get_stock_price function when asked for a stock price. Provide a clear comparison when asked about multiple stocks.\n\nUser: {user_query}",
+#         tools=[stock_price_function],
+#         stream=False,
+#     )
+
+#     print("First Response: " + str(response.output))
+#     print("-" * 60)
+
+#     # Check if response contains output
+#     if not response.output or len(response.output) == 0:
+#         return {"response": "No response received from the API"}
+
+#     tool_calls = [
+#         output
+#         for output in response.output
+#         if hasattr(output, "type") and output.type == "function_call"
+#     ]
+
+#     if tool_calls:
+#         # Process all stock prices
+#         stock_prices = {}
+#         for tool_call in tool_calls:
+#             if tool_call.name == "get_stock_price":
+#                 args = json.loads(tool_call.arguments)
+#                 ticker = args["ticker"]
+#                 price = get_stock_price(ticker)
+#                 stock_prices[ticker] = price
+
+#         # Prepare tool results for follow-up
+#         tool_results = "\n".join(
+#             [
+#                 f"The latest price for {ticker} is ${price}"
+#                 for ticker, price in stock_prices.items()
+#             ]
+#         )
+
+#         # Follow-up call with explicit instruction to summarize results
+#         follow_up_response = client.responses.create(
+#             model="gpt-4o-mini",
+#             input=f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. The user asked: '{user_query}'. Using the tool results below, provide a concise text response summarizing the information. Do not invoke additional tool calls unless explicitly requested.\n\nTool results:\n{tool_results}\n\nNow, respond to the user with the stock prices in a clear, natural language format.",
+#             tools=[
+#                 stock_price_function
+#             ],  # Still provide tools in case they're needed later
+#             stream=False,
+#         )
+#         print("Follow-up Response: " + str(follow_up_response))
+#         print("-" * 60)
+#         print(
+#             f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading.\n\nUser: {user_query}\n\nTool results:\n{tool_results}"
+#         )
+#         print("-" * 60)
+
+#         # Handle follow-up response
+#         if (
+#             follow_up_response.output
+#             and len(follow_up_response.output) > 0
+#             and hasattr(follow_up_response.output[0], "content")
+#             and len(follow_up_response.output[0].content) > 0
+#         ):
+#             raw_text = follow_up_response.output[0].content[0].text
+#             formatted_text = process_text(raw_text)
+#             return {"response": formatted_text}
+#         else:
+#             # Fallback: If no text response, return the tool results directly
+#             formatted_text = process_text(tool_results)
+#             return {"response": formatted_text}
+
+#     # Check if it's a direct response (ResponseOutputMessage)
+#     elif (
+#         hasattr(response.output[0], "content")
+#         and len(response.output[0].content) > 0
+#         and hasattr(response.output[0].content[0], "text")
+#     ):
+#         raw_text = response.output[0].content[0].text
+#         formatted_text = process_text(raw_text)
+#         return {"response": formatted_text}
+#     else:
+#         return {"response": "Error: Unable to process the response"}
+
+
+# @app.get("/health")
+# async def health_check():
+#     return {"status": "OK"}
+
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yfinance as yf
@@ -6,6 +298,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
+from langchain_community.tools import DuckDuckGoSearchRun
+from datetime import datetime  # Added for dynamic date
 
 # Load environment variables
 load_dotenv()
@@ -15,6 +309,9 @@ if not OPENAI_API_KEY:
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize DuckDuckGo search
+search = DuckDuckGoSearchRun()
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -40,6 +337,7 @@ class QueryRequest(BaseModel):
 
 
 def get_stock_price(ticker: str) -> str:
+    print(f"Calling get_stock_price tool for ticker: {ticker}")
     try:
         stock = yf.Ticker(ticker.upper())
         price = stock.history(period="1d")["Close"].iloc[-1]
@@ -65,9 +363,25 @@ stock_price_function = {
     },
 }
 
+web_search_function = {
+    "type": "function",
+    "name": "web_search",
+    "description": "Perform a web search using DuckDuckGo to find current information or prices in USD relevant to the user's query",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to look up on the web",
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
 
 def is_related_to_stocks_crypto(query: str) -> bool:
-    # Keywords related to finance
     keywords = [
         "stock",
         "stocks",
@@ -88,7 +402,6 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "gold",
         "XAUUSD",
     ]
-    # Company/business-related keywords
     company_keywords = [
         "company",
         "business",
@@ -102,7 +415,6 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "products",
         "services",
     ]
-    # Well-known companies with stocks
     known_companies = [
         "tesla",
         "apple",
@@ -121,12 +433,8 @@ def is_related_to_stocks_crypto(query: str) -> bool:
     ]
 
     query_lower = query.lower()
-
-    # Check direct financial keywords
     if any(keyword in query_lower for keyword in keywords):
         return True
-
-    # Check company-related keywords
     if any(keyword in query_lower for keyword in company_keywords):
         words = query.split()
         potential_companies = [
@@ -139,27 +447,28 @@ def is_related_to_stocks_crypto(query: str) -> bool:
                     return True
             except Exception:
                 pass
-
-    # Check well-known companies
     if any(company in query_lower for company in known_companies):
         return True
-
     return False
 
 
-# Function to process text with Markdown-like formatting
+def requires_current_data(query: str) -> bool:
+    current_keywords = ["latest", "current", "today", "now", "real-time", "price"]
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in current_keywords)
+
+
+def validate_usd_result(result: str) -> bool:
+    return "$" in result or "USD" in result.lower()
+
+
 def process_text(text):
-    # Split text into lines for processing
     lines = text.split("\n")
     processed_lines = []
-
     for line in lines:
         if not line.strip():
-            # Preserve empty lines as breaks
             processed_lines.append("<br>")
             continue
-
-            # Handle headings
         if line.startswith("### "):
             line = f"<h3>{line[4:].strip()}</h3>"
         elif line.startswith("## "):
@@ -167,27 +476,16 @@ def process_text(text):
         elif line.startswith("# "):
             line = f"<h1>{line[2:].strip()}</h1>"
         else:
-            # Wrap non-heading lines in a paragraph tag for consistency
             line = f"<p>{line.strip()}</p>"
-
-            # Process inline Markdown within the line
-            # Bold (**text** or __text__)
         while "**" in line:
             line = line.replace("**", "<b>", 1).replace("**", "</b>", 1)
         while "__" in line:
             line = line.replace("__", "<b>", 1).replace("__", "</b>", 1)
-
-            # Italics (*text* or _text_)
         while "*" in line and line.count("*") >= 2:
             line = line.replace("*", "<i>", 1).replace("*", "</i>", 1)
-        while (
-            "_" in line and line.count("_") >= 2 and "__" not in line
-        ):  # Avoid conflict with bold
+        while "_" in line and line.count("_") >= 2 and "__" not in line:
             line = line.replace("_", "<i>", 1).replace("_", "</i>", 1)
-
         processed_lines.append(line)
-
-        # Join lines with breaks where needed
     return "".join(processed_lines)
 
 
@@ -196,25 +494,59 @@ async def chat(query: QueryRequest):
     user_query = query.message
     print(f"Received query: {user_query}")
 
-    # Check if query is related to finance
     if not is_related_to_stocks_crypto(user_query):
+        print("Query not related to stocks/crypto, returning restricted response")
         return {
             "response": "I can only answer questions about stocks, cryptocurrency, or trading. Please ask about one of those topics!"
         }
 
-    # Initial call to OpenAI
+    if requires_current_data(user_query):
+        print("Query requires current data, triggering web search")
+        current_date = datetime.now().strftime("%B %d, %Y")
+        search_query = f"{user_query} in USD on {current_date}"
+        search_result = search.invoke(search_query)
+        print(f"Web search result: {search_result}")
+
+        if not validate_usd_result(search_result):
+            print("Search result not in USD, refining search")
+            search_result = search.invoke(
+                f"{user_query} price in US dollars on {current_date}"
+            )
+            print(f"Refined web search result: {search_result}")
+
+        # Convert INR to USD if necessary
+        if "Rs." in search_result or "₹" in search_result:
+            try:
+                inr_price = float(
+                    search_result.split("Rs.")[1].split()[0].replace(",", "")
+                )
+                grams = 10  # Assuming 10 grams from context
+                usd_price = inr_price / 83  # Approx exchange rate
+                usd_per_ounce = usd_price / 0.3215  # Convert to per ounce
+                search_result += (
+                    f"\nConverted to USD: approximately ${usd_per_ounce:.2f} per ounce"
+                )
+                print(f"Converted INR to USD: ${usd_per_ounce:.2f} per ounce")
+            except Exception as e:
+                print(f"Conversion error: {e}")
+                search_result += "\nNote: INR price detected, but conversion failed. Using USD data where available."
+
+        initial_input = f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. You must provide very clear and explicit answers. If the user asks for a recommendation, give a direct 'You should...' statement. The user asked: '{user_query}'. Use the following web search result (in USD) to inform your response:\n\n{search_result}\n\nNow, respond to the user with a concise, explicit answer in USD only, ending with: 'It’s always good to get advice from our professionals here at NRDX.com.'"
+    else:
+        print("Query does not require current data, proceeding with standard logic")
+        initial_input = f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. You must provide very clear and explicit answers. If the user asks for a recommendation, give a direct 'You should...' statement. Use the get_stock_price function when asked for a stock price. Use the web_search function when the query requires external information, ensuring all prices are in USD. Provide a clear comparison when asked about multiple stocks.\n\nUser: {user_query}"
+
     response = client.responses.create(
         model="gpt-4o-mini",
-        input=f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the get_stock_price function when asked for a stock price. Provide a clear comparison when asked about multiple stocks.\n\nUser: {user_query}",
-        tools=[stock_price_function],
+        input=initial_input,
+        tools=[stock_price_function, web_search_function],
         stream=False,
     )
-
-    print("First Response: " + str(response.output))
+    print(f"First Response: {str(response.output)}")
     print("-" * 60)
 
-    # Check if response contains output
     if not response.output or len(response.output) == 0:
+        print("No response received from API")
         return {"response": "No response received from the API"}
 
     tool_calls = [
@@ -224,40 +556,39 @@ async def chat(query: QueryRequest):
     ]
 
     if tool_calls:
-        # Process all stock prices
-        stock_prices = {}
+        tool_results = []
         for tool_call in tool_calls:
             if tool_call.name == "get_stock_price":
                 args = json.loads(tool_call.arguments)
                 ticker = args["ticker"]
                 price = get_stock_price(ticker)
-                stock_prices[ticker] = price
+                tool_results.append(f"The latest price for {ticker} is ${price}")
+            elif tool_call.name == "web_search":
+                args = json.loads(tool_call.arguments)
+                search_query = f"{args['query']} in USD"
+                search_result = search.invoke(search_query)
+                print(
+                    f"Web search tool called with query: {search_query}, result: {search_result}"
+                )
+                if not validate_usd_result(search_result):
+                    search_result = search.invoke(
+                        f"{args['query']} price in US dollars"
+                    )
+                    print(f"Refined web search result: {search_result}")
+                tool_results.append(
+                    f"Web search result for '{args['query']}': {search_result}"
+                )
 
-        # Prepare tool results for follow-up
-        tool_results = "\n".join(
-            [
-                f"The latest price for {ticker} is ${price}"
-                for ticker, price in stock_prices.items()
-            ]
-        )
-
-        # Follow-up call with explicit instruction to summarize results
+        tool_results_text = "\n".join(tool_results)
         follow_up_response = client.responses.create(
             model="gpt-4o-mini",
-            input=f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. The user asked: '{user_query}'. Using the tool results below, provide a concise text response summarizing the information. Do not invoke additional tool calls unless explicitly requested.\n\nTool results:\n{tool_results}\n\nNow, respond to the user with the stock prices in a clear, natural language format.",
-            tools=[
-                stock_price_function
-            ],  # Still provide tools in case they're needed later
+            input=f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading. You must provide very clear and explicit answers. If the user asks for a recommendation, give a direct 'You should...' statement. The user asked: '{user_query}'. Using the tool results below, provide a concise and explicit text response in USD only, ending with: 'It’s always good to get advice from our professionals here at NRDX.com.'\n\nTool results:\n{tool_results_text}\n\nNow, respond to the user.",
+            tools=[stock_price_function, web_search_function],
             stream=False,
         )
-        print("Follow-up Response: " + str(follow_up_response))
-        print("-" * 60)
-        print(
-            f"System: You are a financial assistant specializing in stocks, cryptocurrency, and trading.\n\nUser: {user_query}\n\nTool results:\n{tool_results}"
-        )
+        print(f"Follow-up Response: {str(follow_up_response)}")
         print("-" * 60)
 
-        # Handle follow-up response
         if (
             follow_up_response.output
             and len(follow_up_response.output) > 0
@@ -266,13 +597,13 @@ async def chat(query: QueryRequest):
         ):
             raw_text = follow_up_response.output[0].content[0].text
             formatted_text = process_text(raw_text)
+            print(f"Returning formatted response: {formatted_text}")
             return {"response": formatted_text}
         else:
-            # Fallback: If no text response, return the tool results directly
-            formatted_text = process_text(tool_results)
+            formatted_text = process_text(tool_results_text)
+            print(f"Fallback: Returning raw tool results: {formatted_text}")
             return {"response": formatted_text}
 
-    # Check if it's a direct response (ResponseOutputMessage)
     elif (
         hasattr(response.output[0], "content")
         and len(response.output[0].content) > 0
@@ -280,11 +611,19 @@ async def chat(query: QueryRequest):
     ):
         raw_text = response.output[0].content[0].text
         formatted_text = process_text(raw_text)
+        print(f"Returning direct response: {formatted_text}")
         return {"response": formatted_text}
     else:
+        print("Error processing response")
         return {"response": "Error: Unable to process the response"}
 
 
 @app.get("/health")
 async def health_check():
     return {"status": "OK"}
+
+
+# if __name__ == "__main__":
+#     import uvicorn
+
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
