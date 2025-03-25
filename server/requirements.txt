@@ -3,3 +3,5 @@ uvicorn
 openai
 yfinance
 python-dotenv
+langchain_community
+duckduckgo-search
