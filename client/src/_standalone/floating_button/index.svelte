@@ -65,7 +65,7 @@
             if(messagesContainer) scrollToBottom(messagesContainer);
             
             try {
-                const response = await fetch('http://localhost:8000/chat', {
+                const response = await fetch('http://69.62.69.96:8000/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: userMessage.content }),
@@ -128,7 +128,7 @@
     async function sendHealthCheck() {
         //  a function to test the api connectivity
         try {
-            const response = await fetch('http://localhost:8000/health', {
+            const response = await fetch('http://69.62.69.96:8000/health', {
                 method: 'GET'
             });
             const data = await response.json();
