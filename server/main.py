@@ -336,15 +336,19 @@ origins = [
     "http://localhost:5173",  # Local dev
     "https://localhost",  # Replace with your WordPress domain
     "https://nextdawnai.cloud",
+    "https://nextaisolutions.cloud",
     "*",  # Temporary wildcard; refine for production
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.nextaisolutions\.cloud$",  # Regex for subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Length", "X-Request-ID"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
 
 
