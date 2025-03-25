@@ -65,7 +65,7 @@
             if(messagesContainer) scrollToBottom(messagesContainer);
             
             try {
-                const response = await fetch('https://nextdawnai.cloud:8000/chat', {
+                const response = await fetch('https://nextdawnai.cloud:8000/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: userMessage.content }),
@@ -128,7 +128,7 @@
     async function sendHealthCheck() {
         //  a function to test the api connectivity
         try {
-            const response = await fetch('https://nextdawnai.cloud:8000/health', {
+            const response = await fetch('https://nextdawnai.cloud:8000/api/health', {
                 method: 'GET'
             });
             const data = await response.json();
