@@ -449,7 +449,7 @@ Your concise answer based *only* on the provided search results and user query:"
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "OK"}
+    return {"status": "OK_V2"}
 
     # Working version before refactor
     # from fastapi import FastAPI
