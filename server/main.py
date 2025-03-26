@@ -61,23 +61,125 @@ app.add_middleware(
 
 # --- Helper Functions --- (Keep as they are)
 def is_related_to_stocks_crypto(query: str) -> bool:
+    """
+    Checks if the query is related to the broad financial domain
+    including stocks, crypto, trading, companies, industries, and sectors.
+    """
     keywords = [
+        # Core Finance/Trading
         "stock",
-        "crypto",
-        "trading",
         "shares",
+        "equity",
+        "ticker",
+        "crypto",
+        "cryptocurrency",
         "bitcoin",
         "ethereum",
-        "market",
-        "price",
+        "coin",
+        "token",
+        "trading",
+        "invest",
         "investment",
         "buy",
         "sell",
-        "ticker",
+        "hold",
+        "market",
+        "exchange",
+        "nasdaq",
+        "nyse",
+        "price",
+        "value",
+        "valuation",
         "portfolio",
+        "asset",
+        "dividend",
+        "earnings",
+        "revenue",
+        "profit",
+        "loss",
+        "ipo",
+        "etf",
+        "mutual fund",
+        "bond",
+        "forex",
+        "commodity",
+        "analysis",
+        "forecast",
+        "trend",
+        "outlook",
+        "recommendation",
+        # Broader Business/Company Terms
+        "company",
+        "companies",
+        "business",
+        "corporation",
+        "industry",
+        "sector",
+        "operations",
+        # Specific Known Companies (Examples - add more as needed)
+        "tesla",
+        "tsla",
+        "apple",
+        "aapl",
+        "microsoft",
+        "msft",
+        "google",
+        "googl",
+        "alphabet",
+        "amazon",
+        "amzn",
+        "meta",
+        "facebook",
+        "nvidia",
+        "nvda",
+        "coinbase",
+        "coin",
+        "binance",
+        "netflix",
+        "nflx",
+        "ford",
+        "gm",
+        "boeing",
+        "hp",
+        # Specific Sectors (Examples - add more as needed)
+        "biotech",
+        "technology",
+        "energy",
+        "finance",
+        "healthcare",
+        "pharmaceutical",
+        "semiconductor",
+        "retail",
+        "automotive",
     ]
     query_lower = query.lower()
-    return any(keyword in query_lower for keyword in keywords)
+    # Check if any keyword exists as a whole word or part of the query
+    # Using simple 'in' check is usually sufficient and faster
+    if any(keyword in query_lower for keyword in keywords):
+        print(
+            f"Query deemed related based on keywords. Matched: {[k for k in keywords if k in query_lower]}"
+        )
+        return True
+    print("Query NOT deemed related to finance based on keywords.")
+    return False
+    # keywords = [
+    #     "stock",
+    #     "crypto",
+    #     "trading",
+    #     "shares",
+    #     "bitcoin",
+    #     "ethereum",
+    #     "market",
+    #     "price",
+    #     "investment",
+    #     "buy",
+    #     "sell",
+    #     "ticker",
+    #     "portfolio",
+    #     "tesla",
+    # ]
+    # query_lower = query.lower()
+    # return any(keyword in query_lower for keyword in keywords)
 
 
 def get_stock_price(ticker: str) -> float | str:
