@@ -12,19 +12,17 @@ from datetime import datetime, timedelta, timezone
 import re
 import uuid
 import redis.asyncio as redis
-from contextlib import asynccontextmanager  # Import for lifespan
-
+from contextlib import asynccontextmanager
+import traceback  # Import traceback for better error logging
 
 # --- Configuration & Initialization ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# --- Redis Configuration ---
-REDIS_HOST = os.getenv(
-    "REDIS_HOST", "localhost"
-)  # Allow overriding host via .env if needed
+# --- Redis Configuration (Reads from .env) ---
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")  # Read password from .env
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 # Construct REDIS_URL dynamically
 if REDIS_PASSWORD:
@@ -32,18 +30,13 @@ if REDIS_PASSWORD:
     print("Redis configured WITH password.")
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-    print(
-        "Redis configured WITHOUT password (ensure this is intentional for production)."
-    )
-# --- End of Redis Configuration Update ---
-
+    print("Redis configured WITHOUT password.")
 
 SESSION_TTL_SECONDS = 3 * 60 * 60  # 3 hours
-MAX_HISTORY_PAIRS = 10  # Keep last 10 Q&A pairs
-MAX_HISTORY_MESSAGES = MAX_HISTORY_PAIRS * 2  # Total messages
+MAX_HISTORY_PAIRS = 10
+MAX_HISTORY_MESSAGES = MAX_HISTORY_PAIRS * 2
 
 # --- Initialize Redis Connection Variable ---
-# We will connect/disconnect within the lifespan manager
 redis_conn = None
 
 if not OPENAI_API_KEY:
@@ -63,23 +56,22 @@ class QueryRequest(BaseModel):
     message: str
 
 
-# --- NEW: Lifespan Context Manager for Redis ---
+# --- Lifespan Context Manager for Redis ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_conn  # Declare we are modifying the global variable
+    global redis_conn
     print("Application startup: Initializing Redis connection...")
     try:
         redis_conn = redis.Redis.from_url(
             REDIS_URL, encoding="utf-8", decode_responses=True
         )
-        # Optional: Test connection on startup
         await redis_conn.ping()
         print("Successfully connected to Redis during startup.")
     except Exception as e:
         print(f"Startup Error: Could not connect to Redis: {e}")
-        redis_conn = None  # Ensure it's None if connection fails
+        redis_conn = None
 
-    yield  # The application runs while yielding
+    yield  # App runs here
 
     print("Application shutdown: Closing Redis connection...")
     if redis_conn:
@@ -88,7 +80,7 @@ async def lifespan(app: FastAPI):
     print("Application shutdown complete.")
 
 
-# Initialize FastAPI app with the lifespan manager
+# Initialize FastAPI app with lifespan manager
 app = FastAPI(lifespan=lifespan)
 
 
@@ -116,7 +108,6 @@ app.add_middleware(
 # --- Helper Functions --- (Keep as they are)
 def is_related_to_stocks_crypto(query: str) -> bool:
     keywords = [
-        # Core Finance/Trading
         "stock",
         "shares",
         "equity",
@@ -158,7 +149,6 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "trend",
         "outlook",
         "recommendation",
-        # Broader Business/Company Terms
         "company",
         "companies",
         "business",
@@ -166,7 +156,6 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "industry",
         "sector",
         "operations",
-        # Specific Known Companies (Examples - add more as needed)
         "tesla",
         "tsla",
         "apple",
@@ -191,7 +180,6 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "gm",
         "boeing",
         "hp",
-        # Specific Sectors (Examples - add more as needed)
         "biotech",
         "technology",
         "energy",
@@ -213,13 +201,11 @@ def is_related_to_stocks_crypto(query: str) -> bool:
 def get_stock_price(ticker: str) -> float | str:
     try:
         stock = yf.Ticker(ticker)
-        # Try common attributes first, then fall back to history
         price = stock.info.get("regularMarketPrice", stock.info.get("currentPrice"))
         if price is not None:
             print(f"Fetched price for {ticker}: ${price}")
             return round(float(price), 2)
         else:
-            # If common attributes are missing, try recent history
             hist = stock.history(period="1d")
             if not hist.empty:
                 price = hist["Close"].iloc[-1]
@@ -241,7 +227,6 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
             if not results:
                 print("No results found from DuckDuckGo.")
                 return "No relevant information found."
-            # Format results nicely
             combined_results = "\n".join(
                 [
                     f"- {res.get('title', 'No Title')}: {res.get('body', 'No snippet.')}"
@@ -260,21 +245,18 @@ def validate_usd_result(text: str) -> bool:
 
 
 def process_text(text: str) -> str:
-    # Remove markdown code blocks (json or otherwise)
     text = re.sub(r"```(json)?\s*", "", text)
     text = re.sub(r"\s*```", "", text)
     suffix = "It’s always good to get advice from our professionals here at NRDX.com."
     text_stripped = text.strip()
-    # Add the suffix only if it's not already there
     if not text_stripped.endswith(suffix):
-        # Add punctuation if needed before the suffix
         if text_stripped and text_stripped[-1] not in [".", "!", "?"]:
             text_stripped += "."
         text_stripped += f" {suffix}"
     return text_stripped
 
 
-# --- OpenAI Tool Definitions --- (Included as requested)
+# --- OpenAI Tool Definitions ---
 stock_price_function = {
     "type": "function",
     "function": {
@@ -312,32 +294,39 @@ available_tools = [stock_price_function, web_search_function]
 # --- Core Logic ---
 
 
-# needs_web_search function (Keep as is)
+# needs_web_search function
 async def needs_web_search(user_query: str) -> bool:
-    if not client:
-        print("OpenAI client not available for web search classification.")
+    # Add more explicit logging here
+    print(f"Running needs_web_search classification for: '{user_query}'")
+    # Basic check: if query is short and asks about memory, likely no search needed
+    query_lower = user_query.lower()
+    if len(query_lower.split()) < 10 and (
+        "remember" in query_lower
+        or "what was" in query_lower
+        or "talked about" in query_lower
+    ):
+        print("Query seems like a recall question, skipping web search classification.")
         return False
 
-    print(f"Classifying query for web search need: '{user_query}'")
+    if not client:
+        return False
     try:
         classification_messages = [
             {
                 "role": "system",
-                "content": "Analyze the user query. Does it require searching the web for current events, real-time data (like exact current prices not covered by tools), or very recent information published today or within the last few days? Answer only with 'True' or 'False'.",
+                "content": "Analyze the user query. Does it require searching the web for current events (e.g., today's news), real-time data (like specific current stock prices not covered by tools), or very recent information published today or within the last few days? Do NOT say True if the user is asking about the conversation history or what was said before. Answer only with 'True' or 'False'.",
             },
             {
                 "role": "user",
                 "content": f'User Query: "{user_query}"\n\nRequires Web Search (True/False):',
             },
         ]
-
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Specify a fast, cheap model for classification
+            model="gpt-4o-mini",
             messages=classification_messages,
             max_tokens=5,
             temperature=0.0,
         )
-
         if (
             response.choices
             and response.choices[0].message
@@ -345,47 +334,40 @@ async def needs_web_search(user_query: str) -> bool:
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"Web search classification result: '{result_text}'")
-            # Be slightly more robust in checking the result
             return "true" in result_text
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
-            print(f"Raw classification response: {response}")
             return False
     except Exception as e:
         print(f"Error during web search classification LLM call: {e}")
         return False
 
 
-# handle_tool_calls function (Keep as is)
+# handle_tool_calls function
 async def handle_tool_calls(
     response_message,
-    user_query: str,
-    messages_history: list,
+    user_query: str,  # Keep for logging/context if needed, though messages_history is primary
+    messages_history: list,  # The history that *led* to the tool call
 ) -> str:
     if not client:
         return "Error: OpenAI client not available to handle tool calls."
-
     tool_calls = response_message.tool_calls
     if not tool_calls:
         return response_message.content or "Error: No tool calls found and no content."
 
     print(f"Handling {len(tool_calls)} tool call(s)...")
-    messages_with_tool_requests = messages_history + [response_message]
-    messages_for_follow_up = (
-        messages_with_tool_requests  # Start with previous history + assistant's request
-    )
+    # Start the history for the *follow-up* call with the history *up to and including* the assistant's request for tools
+    messages_for_follow_up = messages_history + [response_message]
 
     for tool_call in tool_calls:
         function_name = tool_call.function.name
         function_args_str = tool_call.function.arguments
         tool_call_id = tool_call.id
         result_content = ""
-
         try:
             args_dict = json.loads(function_args_str)
-
             if function_name == "get_stock_price":
                 ticker = args_dict.get("ticker")
                 if ticker:
@@ -404,11 +386,9 @@ async def handle_tool_calls(
                     result_content = "Error: Search query missing for web_search."
             else:
                 result_content = f"Error: Unknown function '{function_name}' called."
-
             print(
                 f"Tool '{function_name}' executed. Result snippet: {result_content[:100]}..."
             )
-
         except json.JSONDecodeError:
             print(
                 f"Error decoding arguments for tool {function_name}: {function_args_str}"
@@ -418,7 +398,7 @@ async def handle_tool_calls(
             print(f"Error executing tool {function_name}: {e}")
             result_content = f"Error executing tool: {e}"
 
-        # Append the tool result message
+        # Append the tool result message for the follow-up call
         messages_for_follow_up.append(
             {
                 "tool_call_id": tool_call_id,
@@ -430,9 +410,9 @@ async def handle_tool_calls(
 
     print("Making follow-up LLM call with tool results...")
     try:
+        # Send the history including the assistant's request AND the tool results
         follow_up_response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages_for_follow_up,  # Send the history including tool results
+            model="gpt-4o-mini", messages=messages_for_follow_up
         )
         final_content = follow_up_response.choices[0].message.content
         print(
@@ -441,27 +421,21 @@ async def handle_tool_calls(
         return final_content or "Error: No content in follow-up response."
     except Exception as e:
         print(f"Error during follow-up LLM call: {e}")
-        # Fallback: Provide raw tool results if summary fails
         raw_results_text = "\n".join(
             [msg["content"] for msg in messages_for_follow_up if msg["role"] == "tool"]
         )
         return f"Could not get final summary due to API error. Tool results:\n{raw_results_text}"
 
 
-# --- /api/chat Endpoint (Using Redis Session) ---
+# --- /api/chat Endpoint (FIXED Logic) ---
 @app.post("/api/chat")
 async def chat(query: QueryRequest, request: Request, response: Response):
-    # Use the global redis_conn initialized by lifespan
     global redis_conn, client
 
     if not client:
         raise HTTPException(status_code=503, detail="OpenAI client not initialized")
     if not redis_conn:
-        # Decide how to handle Redis being unavailable during a request
-        print(
-            "Warning: Redis not available for this request. Proceeding without session memory."
-        )
-        # Optionally: raise HTTPException(status_code=503, detail="Session service unavailable")
+        print("Warning: Redis not available. Proceeding without session memory.")
 
     user_query = query.message
     session_id = request.cookies.get("chatbotSessionId")
@@ -473,32 +447,40 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     )
     print(f"Received query: {user_query}")
 
-    # --- Load History from Redis (if available) ---
+    # --- Load History ---
     if redis_conn and session_id:
         try:
             history_json = await redis_conn.get(session_id)
             if history_json:
                 loaded_history = json.loads(history_json)
-                await redis_conn.expire(session_id, SESSION_TTL_SECONDS)  # Reset TTL
-                print(
-                    f"Loaded {len(loaded_history)} messages from session {session_id[-6:]}. TTL reset."
-                )
+                # Ensure loaded_history is a list of dicts
+                if not isinstance(loaded_history, list):
+                    print(
+                        f"Warning: History loaded from Redis is not a list: {type(loaded_history)}. Resetting."
+                    )
+                    loaded_history = []
+                    session_id = None  # Treat as new if data is corrupt
+                else:
+                    await redis_conn.expire(session_id, SESSION_TTL_SECONDS)
+                    print(
+                        f"Loaded {len(loaded_history)} messages from session {session_id[-6:]}."
+                    )
             else:
                 print(f"Session ID {session_id[-6:]} not found in Redis.")
-                session_id = None  # Treat as new
+                session_id = None
         except json.JSONDecodeError:
             print(f"Error decoding history for session {session_id}. Starting fresh.")
-            session_id = None  # Treat as new
+            session_id = None
         except Exception as e:
             print(f"Redis GET/EXPIRE error: {e}. Proceeding without history.")
-            # Keep session_id if it existed, but history will be empty
+            # Keep session_id but history is empty
 
-    # --- Create New Session ID if Needed ---
-    if redis_conn and not session_id:  # Only create if Redis is available
+    # --- Create New Session ID ---
+    if redis_conn and not session_id:
         is_new_session = True
         session_id = str(uuid.uuid4())
         print(f"Generated new session ID: {session_id[-6:]}")
-        loaded_history = []  # Ensure history is empty for new session
+        loaded_history = []
 
     # --- Core Logic ---
     if not is_related_to_stocks_crypto(user_query):
@@ -508,22 +490,25 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         }
 
     final_response_content = ""
-    raw_ai_response = None  # Store response before formatting for history
+    raw_ai_response = None
+    messages_sent_to_openai = (
+        []
+    )  # Track what was actually sent for tool handling context
 
     try:
+        # Determine if search is needed (now less likely for recall questions)
         search_needed = await needs_web_search(user_query)
-        system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD."
 
-        openai_response = None
-        current_user_message = {"role": "user", "content": user_query}
-        messages_for_api = (
-            [{"role": "system", "content": system_prompt}]
-            + loaded_history
-            + [current_user_message]
-        )
+        system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD."
+
+        # Always start constructing the message list with system prompt and history
+        base_messages = [{"role": "system", "content": system_prompt}] + loaded_history
+        # The user's current raw message
+        current_user_message_dict = {"role": "user", "content": user_query}
 
         if search_needed:
-            print("Web search needed. Bypassing memory for summarization call.")
+            print("Web search determined to be needed...")
+            # ... Perform search ...
             current_date = datetime.now().strftime("%B %d, %Y")
             search_query = f"{user_query} price in USD on {current_date}"
             search_result_text = duckduckgo_search(search_query)
@@ -539,46 +524,54 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 search_result_text = duckduckgo_search(refined_search_query)
                 print(f"Refined search snippet: {search_result_text[:200]}...")
 
-            summarization_prompt_content = f"""Use the following web search results to answer the user's query: "{user_query}". Summarize the relevant information concisely, ensure the final answer is in USD, and respond directly to the user's question.
+            # --- MODIFIED: Combine query, history, and search results ---
+            # Create a modified user message content that includes context for the AI
+            contextual_prompt_content = f"""Based on our previous conversation history AND the following recent web search results, please answer the user's latest query: "{user_query}"
 
 Web Search Results:
 ---
 {search_result_text}
 ---
 
-Your concise answer based *only* on the provided search results and user query:"""
-            messages_for_summarization = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": summarization_prompt_content},
-            ]
-            print("Making LLM call to summarize web search...")
+Your concise answer:"""
+            # Create the message dictionary with the modified content
+            contextual_user_message_dict = {
+                "role": "user",
+                "content": contextual_prompt_content,
+            }
+            # Prepare the final list for the API call
+            messages_sent_to_openai = base_messages + [contextual_user_message_dict]
+
+            print("Making LLM call with history AND search results context...")
             openai_response = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=messages_for_summarization,
+                messages=messages_sent_to_openai,
                 tools=available_tools,
                 tool_choice="auto",
-            )
-            messages_for_api = (
-                messages_for_summarization  # Track what was actually sent for this turn
             )
 
         else:
+            # --- Web search not needed, send history + current query ---
             print(
                 f"Web search not needed. Making LLM call with history ({len(loaded_history)} msgs)..."
             )
+            # Prepare the final list for the API call
+            messages_sent_to_openai = base_messages + [current_user_message_dict]
             openai_response = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=messages_for_api,
+                messages=messages_sent_to_openai,
                 tools=available_tools,
                 tool_choice="auto",
             )
 
+        # --- Process OpenAI response (Tools or Direct) ---
         response_message = openai_response.choices[0].message
 
         if response_message.tool_calls:
             print(f"Tool call(s) requested...")
+            # Pass the *actual messages sent* to handle_tool_calls for context
             raw_ai_response = await handle_tool_calls(
-                response_message, user_query, messages_for_api
+                response_message, user_query, messages_sent_to_openai
             )
         else:
             raw_ai_response = response_message.content
@@ -586,18 +579,16 @@ Your concise answer based *only* on the provided search results and user query:"
                 f"Direct text response extracted snippet: {raw_ai_response[:100] if raw_ai_response else 'None'}..."
             )
 
+        # --- Format Final Response ---
         if not raw_ai_response:
             print("Error: No final content generated.")
-            final_response_content = (
-                "I encountered an issue processing your request. Please try again."
-            )
-            raw_ai_response = None  # Prevent saving this error state
+            final_response_content = "I encountered an issue processing your request."
+            raw_ai_response = None
         else:
-            final_response_content = process_text(
-                raw_ai_response
-            )  # Format for user display
+            final_response_content = process_text(raw_ai_response)
             print(f"Returning formatted response: {final_response_content}")
 
+    # --- Error Handling ---
     except BadRequestError as bre:
         print(f"OpenAI API Bad Request Error: {bre}")
         raw_ai_response = None
@@ -609,44 +600,40 @@ Your concise answer based *only* on the provided search results and user query:"
         raw_ai_response = None
         raise http_exc
     except Exception as e:
-        print(f"An critical error occurred in the chat endpoint: {e}")
-        import traceback
-
+        print(f"An critical error occurred: {e}")
         traceback.print_exc()
         raw_ai_response = None
         raise HTTPException(
             status_code=500, detail="An internal server error occurred."
         )
 
-    # --- Save History to Redis (if appropriate) ---
-    if (
-        redis_conn and session_id and raw_ai_response
-    ):  # Only if Redis works, session exists, and AI succeeded
+    # --- Save History ---
+    # Only save if successful and we have the necessary components
+    if redis_conn and session_id and raw_ai_response:
         try:
+            # Use the ORIGINAL user message dict for saving, not the contextual one
             new_history_entry = [
-                current_user_message,
+                current_user_message_dict,
                 {"role": "assistant", "content": raw_ai_response},
             ]
             updated_history = loaded_history + new_history_entry
-            # Truncate history
+            # Truncate
             if len(updated_history) > MAX_HISTORY_MESSAGES:
                 updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
                 print(f"History truncated to last {len(updated_history)} messages.")
-
+            # Save
             history_to_save_json = json.dumps(updated_history)
             await redis_conn.set(
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
             print(
-                f"Saved updated history ({len(updated_history)} messages) to session {session_id[-6:]}"
+                f"Saved history ({len(updated_history)} msgs) to session {session_id[-6:]}"
             )
         except Exception as e:
             print(f"Redis SET error: {e}. History not saved.")
 
-    # --- Set Cookie If New Session ---
-    if (
-        is_new_session and session_id and redis_conn
-    ):  # Only set cookie if session was successfully created with Redis
+    # --- Set Cookie ---
+    if is_new_session and session_id and redis_conn:
         response.set_cookie(
             key="chatbotSessionId",
             value=session_id,
@@ -654,7 +641,7 @@ Your concise answer based *only* on the provided search results and user query:"
             httponly=True,
             samesite="Lax",
             path="/",
-            # secure=True, # UNCOMMENT FOR PRODUCTION HTTPS
+            # , secure=True # UNCOMMENT FOR HTTPS
         )
         print(f"Set session cookie for new session {session_id[-6:]}")
 
@@ -664,7 +651,7 @@ Your concise answer based *only* on the provided search results and user query:"
 # --- Health Check Endpoint ---
 @app.get("/api/health")
 async def health_check():
-    global redis_conn  # Access global redis_conn
+    global redis_conn
     redis_status = "not_initialized"
     if redis_conn:
         try:
@@ -672,7 +659,10 @@ async def health_check():
             redis_status = "connected"
         except Exception:
             redis_status = "error_connecting"
-    return {"status": "OK_V2", "redis_status": redis_status}
+    return {
+        "status": "OK_V2_fixed",
+        "redis_status": redis_status,
+    }  # Added _fixed to status for testing deploy
 
 
 # --- Optional: To Run Directly ---
