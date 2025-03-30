@@ -13,7 +13,7 @@ import re
 import uuid
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-import traceback  # Import traceback for better error logging
+import traceback
 
 # --- Configuration & Initialization ---
 load_dotenv()
@@ -24,7 +24,6 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
-# Construct REDIS_URL dynamically
 if REDIS_PASSWORD:
     REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
     print("Redis configured WITH password.")
@@ -36,19 +35,17 @@ SESSION_TTL_SECONDS = 3 * 60 * 60  # 3 hours
 MAX_HISTORY_PAIRS = 10
 MAX_HISTORY_MESSAGES = MAX_HISTORY_PAIRS * 2
 
-# --- Initialize Redis Connection Variable ---
-redis_conn = None
-
+# --- Initialize OpenAI Client (can stay global or move to lifespan/app.state too) ---
+openai_client = None  # Initialize
 if not OPENAI_API_KEY:
     print("Error: OPENAI_API_KEY not found in environment variables!")
-    client = None
 else:
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
         print("OpenAI client initialized successfully.")
     except Exception as e:
         print(f"Error initializing OpenAI client: {e}")
-        client = None
+        openai_client = None
 
 
 # --- Pydantic Models ---
@@ -56,35 +53,54 @@ class QueryRequest(BaseModel):
     message: str
 
 
-# --- Lifespan Context Manager for Redis ---
+# --- Lifespan Context Manager (Using app.state) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_conn
-    print("Application startup: Initializing Redis connection...")
+    # Initialize state attributes to None
+    app.state.redis_conn = None
+    app.state.openai_client = None  # Also manage openai client here for consistency
+
+    print("Lifespan: Initializing resources...")
     try:
-        redis_conn = redis.Redis.from_url(
+        # Initialize Redis client
+        redis_connection = redis.Redis.from_url(
             REDIS_URL, encoding="utf-8", decode_responses=True
         )
-        await redis_conn.ping()
-        print("Successfully connected to Redis during startup.")
+        # *** Removed ping() from startup ***
+        # Store the connection object on app.state
+        app.state.redis_conn = redis_connection
+        print("Lifespan: Redis client created (connection test deferred).")
+
+        # Initialize OpenAI client (can also be done here)
+        if OPENAI_API_KEY:
+            app.state.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+            print("Lifespan: OpenAI client created.")
+        else:
+            print(
+                "Lifespan Warning: OPENAI_API_KEY not found, OpenAI client not created."
+            )
+
     except Exception as e:
-        print(f"Startup Error: Could not connect to Redis: {e}")
-        redis_conn = None
+        print(f"Lifespan Startup Error: Could not initialize resources: {e}")
+        # Ensure connections are None if setup fails
+        if app.state.redis_conn:
+            await app.state.redis_conn.close()  # Attempt close if object was created
+            app.state.redis_conn = None
+        app.state.openai_client = None
 
     yield  # App runs here
 
-    print("Application shutdown: Closing Redis connection...")
-    if redis_conn:
-        await redis_conn.close()
-        print("Redis connection closed.")
-    print("Application shutdown complete.")
+    print("Lifespan: Shutting down resources...")
+    if hasattr(app.state, "redis_conn") and app.state.redis_conn:
+        await app.state.redis_conn.close()
+        print("Lifespan: Redis connection closed.")
+    # No explicit close needed for OpenAI client typically
+    print("Lifespan: Shutdown complete.")
 
 
-# Initialize FastAPI app with lifespan manager
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan)  # Register lifespan manager
 
-
-# CORS configuration
+# CORS configuration (Keep as is)
 origins = [
     "http://localhost:5173",
     "https://localhost",
@@ -92,7 +108,6 @@ origins = [
     "https://nextaisolutions.cloud",
     "*",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -144,6 +159,8 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "bond",
         "forex",
         "commodity",
+        "gold",
+        "silver",
         "analysis",
         "forecast",
         "trend",
@@ -191,10 +208,19 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "automotive",
     ]
     query_lower = query.lower()
-    if any(keyword in query_lower for keyword in keywords):
-        print(f"Query deemed related based on keywords.")
+    if any(
+        re.search(r"\b" + re.escape(keyword) + r"\b", query_lower)
+        or keyword in query_lower
+        for keyword in keywords
+    ):
+        matched_keywords = [
+            k
+            for k in keywords
+            if re.search(r"\b" + re.escape(k) + r"\b", query_lower) or k in query_lower
+        ]
+        print(f"Query deemed related. Matched keywords: {matched_keywords}")
         return True
-    print("Query NOT deemed related to finance based on keywords.")
+    print("Query NOT deemed related based on keywords.")
     return False
 
 
@@ -203,40 +229,31 @@ def get_stock_price(ticker: str) -> float | str:
         stock = yf.Ticker(ticker)
         price = stock.info.get("regularMarketPrice", stock.info.get("currentPrice"))
         if price is not None:
-            print(f"Fetched price for {ticker}: ${price}")
             return round(float(price), 2)
-        else:
-            hist = stock.history(period="1d")
-            if not hist.empty:
-                price = hist["Close"].iloc[-1]
-                print(f"Fetched closing price for {ticker}: ${price}")
-                return round(float(price), 2)
-            else:
-                print(f"Could not find price data for {ticker} via info or history.")
-                return f"Could not retrieve price for {ticker}."
+        hist = stock.history(period="1d")
+        if not hist.empty:
+            return round(float(hist["Close"].iloc[-1]), 2)
+        return f"Could not retrieve price for {ticker}."
     except Exception as e:
         print(f"Error fetching price for {ticker}: {e}")
         return f"Error retrieving price for {ticker}."
 
 
 def duckduckgo_search(query: str, max_results: int = 5) -> str:
-    print(f"Performing DuckDuckGo search for: '{query}'")
+    print(f"DDG Search: '{query}'")
     try:
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, max_results=max_results)]
             if not results:
-                print("No results found from DuckDuckGo.")
                 return "No relevant information found."
-            combined_results = "\n".join(
+            return "\n".join(
                 [
                     f"- {res.get('title', 'No Title')}: {res.get('body', 'No snippet.')}"
                     for res in results
                 ]
             )
-            print(f"DuckDuckGo search returned {len(results)} results.")
-            return combined_results
     except Exception as e:
-        print(f"Error during DuckDuckGo search: {e}")
+        print(f"DDG Error: {e}")
         return "Error performing web search."
 
 
@@ -250,13 +267,13 @@ def process_text(text: str) -> str:
     suffix = "It’s always good to get advice from our professionals here at NRDX.com."
     text_stripped = text.strip()
     if not text_stripped.endswith(suffix):
-        if text_stripped and text_stripped[-1] not in [".", "!", "?"]:
+        if text_stripped and text_stripped[-1] not in ".!?":
             text_stripped += "."
         text_stripped += f" {suffix}"
     return text_stripped
 
 
-# --- OpenAI Tool Definitions ---
+# --- OpenAI Tool Definitions --- (Keep as they are)
 stock_price_function = {
     "type": "function",
     "function": {
@@ -290,26 +307,31 @@ web_search_function = {
 }
 available_tools = [stock_price_function, web_search_function]
 
-
 # --- Core Logic ---
 
 
-# needs_web_search function
-async def needs_web_search(user_query: str) -> bool:
-    # Add more explicit logging here
-    print(f"Running needs_web_search classification for: '{user_query}'")
-    # Basic check: if query is short and asks about memory, likely no search needed
+async def needs_web_search(
+    user_query: str, client: OpenAI
+) -> bool:  # Pass client explicitly
+    print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
-    if len(query_lower.split()) < 10 and (
-        "remember" in query_lower
-        or "what was" in query_lower
-        or "talked about" in query_lower
+    recall_keywords = [
+        "remember",
+        "what was",
+        "talked about",
+        "previous",
+        "before",
+        "stock name i asked",
+    ]
+    if len(query_lower.split()) < 12 and any(
+        key in query_lower for key in recall_keywords
     ):
-        print("Query seems like a recall question, skipping web search classification.")
+        print("DEBUG: Query classified as recall, skipping web search.")
         return False
 
     if not client:
-        return False
+        print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
+        return False  # Cannot classify without client
     try:
         classification_messages = [
             {
@@ -333,33 +355,31 @@ async def needs_web_search(user_query: str) -> bool:
             and response.choices[0].message.content
         ):
             result_text = response.choices[0].message.content.strip().lower()
-            print(f"Web search classification result: '{result_text}'")
+            print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
             return "true" in result_text
         else:
             print(
-                "Warning: Could not parse classification response. Defaulting to False."
+                "DEBUG: Could not parse classification response. Defaulting to False."
             )
             return False
     except Exception as e:
-        print(f"Error during web search classification LLM call: {e}")
+        print(f"DEBUG: Error during classification LLM call: {e}")
         return False
 
 
-# handle_tool_calls function
 async def handle_tool_calls(
-    response_message,
-    user_query: str,  # Keep for logging/context if needed, though messages_history is primary
-    messages_history: list,  # The history that *led* to the tool call
-) -> str:
+    response_message, user_query: str, messages_history: list, client: OpenAI
+) -> str:  # Pass client
     if not client:
-        return "Error: OpenAI client not available to handle tool calls."
+        return "Error: OpenAI client not available."
     tool_calls = response_message.tool_calls
     if not tool_calls:
-        return response_message.content or "Error: No tool calls found and no content."
+        return response_message.content or "Error: No tool calls or content."
 
-    print(f"Handling {len(tool_calls)} tool call(s)...")
-    # Start the history for the *follow-up* call with the history *up to and including* the assistant's request for tools
-    messages_for_follow_up = messages_history + [response_message]
+    print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
+    messages_for_follow_up = messages_history + [
+        response_message
+    ]  # History up to assistant's request
 
     for tool_call in tool_calls:
         function_name = tool_call.function.name
@@ -370,35 +390,30 @@ async def handle_tool_calls(
             args_dict = json.loads(function_args_str)
             if function_name == "get_stock_price":
                 ticker = args_dict.get("ticker")
-                if ticker:
-                    price = get_stock_price(ticker)
-                    result_content = f"The latest price for {ticker} is: {price}"
-                else:
-                    result_content = "Error: Ticker symbol missing for get_stock_price."
+                price = get_stock_price(ticker)
+                result_content = (
+                    f"Price for {ticker}: {price}"
+                    if ticker
+                    else "Error: Ticker missing."
+                )
             elif function_name == "web_search":
                 search_query_arg = args_dict.get("query")
-                if search_query_arg:
-                    current_date = datetime.now().strftime("%B %d, %Y")
-                    search_query = f"{search_query_arg} in USD on {current_date}"
-                    search_result_text = duckduckgo_search(search_query)
-                    result_content = f"Web search result for '{search_query_arg}': {search_result_text}"
-                else:
-                    result_content = "Error: Search query missing for web_search."
+                result_content = (
+                    duckduckgo_search(
+                        f"{search_query_arg} in USD on {datetime.now():%B %d, %Y}"
+                    )
+                    if search_query_arg
+                    else "Error: Search query missing."
+                )
             else:
-                result_content = f"Error: Unknown function '{function_name}' called."
+                result_content = f"Error: Unknown function '{function_name}'."
             print(
-                f"Tool '{function_name}' executed. Result snippet: {result_content[:100]}..."
+                f"DEBUG: Tool '{function_name}' executed. Result snippet: {result_content[:50]}..."
             )
-        except json.JSONDecodeError:
-            print(
-                f"Error decoding arguments for tool {function_name}: {function_args_str}"
-            )
-            result_content = "Error: Invalid arguments format provided by LLM."
         except Exception as e:
-            print(f"Error executing tool {function_name}: {e}")
+            print(f"DEBUG: Error executing tool {function_name}: {e}")
             result_content = f"Error executing tool: {e}"
 
-        # Append the tool result message for the follow-up call
         messages_for_follow_up.append(
             {
                 "tool_call_id": tool_call_id,
@@ -408,34 +423,36 @@ async def handle_tool_calls(
             }
         )
 
-    print("Making follow-up LLM call with tool results...")
+    print("DEBUG: Making follow-up LLM call with tool results...")
     try:
-        # Send the history including the assistant's request AND the tool results
+        # Send history + request + results
         follow_up_response = client.chat.completions.create(
             model="gpt-4o-mini", messages=messages_for_follow_up
         )
         final_content = follow_up_response.choices[0].message.content
         print(
-            f"Follow-up Response Content snippet: {final_content[:100] if final_content else 'None'}..."
+            f"DEBUG: Follow-up Response snippet: {final_content[:50] if final_content else 'None'}..."
         )
-        return final_content or "Error: No content in follow-up response."
+        return final_content or "Error: No content in follow-up."
     except Exception as e:
-        print(f"Error during follow-up LLM call: {e}")
-        raw_results_text = "\n".join(
-            [msg["content"] for msg in messages_for_follow_up if msg["role"] == "tool"]
-        )
-        return f"Could not get final summary due to API error. Tool results:\n{raw_results_text}"
+        print(f"DEBUG: Error during follow-up LLM call: {e}")
+        return f"Error summarizing tool results."
 
 
-# --- /api/chat Endpoint (FIXED Logic) ---
+# --- /api/chat Endpoint (Uses app.state) ---
 @app.post("/api/chat")
 async def chat(query: QueryRequest, request: Request, response: Response):
-    global redis_conn, client
+    # Get resources from app.state
+    redis_conn = request.app.state.redis_conn
+    client = request.app.state.openai_client  # Get client from state
 
+    # Check if resources are available
     if not client:
-        raise HTTPException(status_code=503, detail="OpenAI client not initialized")
+        raise HTTPException(
+            status_code=503, detail="OpenAI client not available (init error?)"
+        )
     if not redis_conn:
-        print("Warning: Redis not available. Proceeding without session memory.")
+        print("DEBUG: WARNING - Redis connection is NOT available!")  # Log but proceed
 
     user_query = query.message
     session_id = request.cookies.get("chatbotSessionId")
@@ -443,154 +460,133 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     is_new_session = False
 
     print(
-        f"\n--- New Request (Session: {session_id[-6:] if session_id else 'New'}) ---"
+        f"\n--- Request Start (Session: {session_id[-6:] if session_id else 'NEW'}) ---"
     )
-    print(f"Received query: {user_query}")
+    print(f"DEBUG: User Query: {user_query}")
+    print(f"DEBUG: Cookie 'chatbotSessionId' value: {session_id}")
 
     # --- Load History ---
-    if redis_conn and session_id:
+    if redis_conn and session_id:  # Check redis_conn from app.state
+        print(f"DEBUG: Attempting to load history for session {session_id[-6:]}...")
         try:
+            # Use the connection from app.state
             history_json = await redis_conn.get(session_id)
             if history_json:
                 loaded_history = json.loads(history_json)
-                # Ensure loaded_history is a list of dicts
                 if not isinstance(loaded_history, list):
                     print(
-                        f"Warning: History loaded from Redis is not a list: {type(loaded_history)}. Resetting."
+                        f"DEBUG: ERROR - Corrupt history type: {type(loaded_history)}. Resetting."
                     )
                     loaded_history = []
-                    session_id = None  # Treat as new if data is corrupt
+                    session_id = None
                 else:
-                    await redis_conn.expire(session_id, SESSION_TTL_SECONDS)
-                    print(
-                        f"Loaded {len(loaded_history)} messages from session {session_id[-6:]}."
-                    )
+                    print(f"DEBUG: Successfully loaded {len(loaded_history)} messages.")
+                    if loaded_history:
+                        print(f"DEBUG: Last loaded msg: {loaded_history[-1]}")
+                    await redis_conn.expire(
+                        session_id, SESSION_TTL_SECONDS
+                    )  # Reset TTL
             else:
-                print(f"Session ID {session_id[-6:]} not found in Redis.")
+                print(f"DEBUG: Session ID {session_id[-6:]} not found in Redis.")
                 session_id = None
-        except json.JSONDecodeError:
-            print(f"Error decoding history for session {session_id}. Starting fresh.")
+        except json.JSONDecodeError as json_err:
+            print(
+                f"DEBUG: ERROR - JSON Decode failed for session {session_id}: {json_err}. Resetting."
+            )
             session_id = None
         except Exception as e:
-            print(f"Redis GET/EXPIRE error: {e}. Proceeding without history.")
-            # Keep session_id but history is empty
+            print(
+                f"DEBUG: ERROR - Redis GET/EXPIRE failed: {e}. Proceeding without history."
+            )
+            # History remains empty
 
     # --- Create New Session ID ---
-    if redis_conn and not session_id:
+    if redis_conn and not session_id:  # Check redis_conn from app.state
         is_new_session = True
         session_id = str(uuid.uuid4())
-        print(f"Generated new session ID: {session_id[-6:]}")
+        print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
         loaded_history = []
 
     # --- Core Logic ---
     if not is_related_to_stocks_crypto(user_query):
-        print("Query not related to stocks/crypto, returning restricted response")
+        print("Query not related. Returning restricted response.")
         return {
             "response": "I can only answer questions about stocks, cryptocurrency, or trading."
         }
 
     final_response_content = ""
     raw_ai_response = None
-    messages_sent_to_openai = (
-        []
-    )  # Track what was actually sent for tool handling context
+    messages_sent_to_openai = []
 
     try:
-        # Determine if search is needed (now less likely for recall questions)
-        search_needed = await needs_web_search(user_query)
+        # Pass the client from app.state to functions that need it
+        search_needed = await needs_web_search(user_query, client)
+        system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
-        system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD."
-
-        # Always start constructing the message list with system prompt and history
         base_messages = [{"role": "system", "content": system_prompt}] + loaded_history
-        # The user's current raw message
         current_user_message_dict = {"role": "user", "content": user_query}
 
         if search_needed:
-            print("Web search determined to be needed...")
-            # ... Perform search ...
-            current_date = datetime.now().strftime("%B %d, %Y")
-            search_query = f"{user_query} price in USD on {current_date}"
-            search_result_text = duckduckgo_search(search_query)
-            print(f"Web search result snippet: {search_result_text[:200]}...")
-            if (
-                not validate_usd_result(search_result_text)
-                and "No relevant information found" not in search_result_text
-            ):
-                print("Refining search for USD...")
-                refined_search_query = (
-                    f"{user_query} price in US dollars on {current_date}"
-                )
-                search_result_text = duckduckgo_search(refined_search_query)
-                print(f"Refined search snippet: {search_result_text[:200]}...")
-
-            # --- MODIFIED: Combine query, history, and search results ---
-            # Create a modified user message content that includes context for the AI
-            contextual_prompt_content = f"""Based on our previous conversation history AND the following recent web search results, please answer the user's latest query: "{user_query}"
-
-Web Search Results:
----
-{search_result_text}
----
-
-Your concise answer:"""
-            # Create the message dictionary with the modified content
+            print("DEBUG: Web search determined NEEDED.")
+            search_result_text = duckduckgo_search(
+                f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
+            )
+            contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
             contextual_user_message_dict = {
                 "role": "user",
                 "content": contextual_prompt_content,
             }
-            # Prepare the final list for the API call
             messages_sent_to_openai = base_messages + [contextual_user_message_dict]
-
-            print("Making LLM call with history AND search results context...")
-            openai_response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_sent_to_openai,
-                tools=available_tools,
-                tool_choice="auto",
-            )
+            print("DEBUG: Making LLM call with History + Search Results...")
 
         else:
-            # --- Web search not needed, send history + current query ---
-            print(
-                f"Web search not needed. Making LLM call with history ({len(loaded_history)} msgs)..."
-            )
-            # Prepare the final list for the API call
+            print("DEBUG: Web search determined NOT needed.")
             messages_sent_to_openai = base_messages + [current_user_message_dict]
-            openai_response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_sent_to_openai,
-                tools=available_tools,
-                tool_choice="auto",
-            )
+            print("DEBUG: Making LLM call with History + Current Query...")
 
-        # --- Process OpenAI response (Tools or Direct) ---
+        # Log messages being sent
+        print(
+            f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+        )
+        if messages_sent_to_openai:
+            print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
+            if len(messages_sent_to_openai) > 1:
+                print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
+
+        # Use client from app.state
+        openai_response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages_sent_to_openai,
+            tools=available_tools,
+            tool_choice="auto",
+        )
+
+        # Process response
         response_message = openai_response.choices[0].message
-
         if response_message.tool_calls:
-            print(f"Tool call(s) requested...")
-            # Pass the *actual messages sent* to handle_tool_calls for context
+            print(f"DEBUG: Tool call(s) requested...")
+            # Pass client from app.state to tool handler
             raw_ai_response = await handle_tool_calls(
-                response_message, user_query, messages_sent_to_openai
+                response_message, user_query, messages_sent_to_openai, client
             )
         else:
             raw_ai_response = response_message.content
             print(
-                f"Direct text response extracted snippet: {raw_ai_response[:100] if raw_ai_response else 'None'}..."
+                f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
             )
 
-        # --- Format Final Response ---
+        # Format final response
         if not raw_ai_response:
-            print("Error: No final content generated.")
-            final_response_content = "I encountered an issue processing your request."
+            print("DEBUG: ERROR - No final content generated.")
+            final_response_content = "I encountered an issue."
             raw_ai_response = None
         else:
             final_response_content = process_text(raw_ai_response)
-            print(f"Returning formatted response: {final_response_content}")
+            print(f"DEBUG: Returning formatted response: {final_response_content}")
 
-    # --- Error Handling ---
+    # Error Handling
     except BadRequestError as bre:
-        print(f"OpenAI API Bad Request Error: {bre}")
+        print(f"DEBUG: ERROR - OpenAI Bad Request: {bre}")
         raw_ai_response = None
         raise HTTPException(
             status_code=400,
@@ -600,40 +596,38 @@ Your concise answer:"""
         raw_ai_response = None
         raise http_exc
     except Exception as e:
-        print(f"An critical error occurred: {e}")
+        print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
         traceback.print_exc()
         raw_ai_response = None
-        raise HTTPException(
-            status_code=500, detail="An internal server error occurred."
-        )
+        raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
-    # Only save if successful and we have the necessary components
-    if redis_conn and session_id and raw_ai_response:
+    if redis_conn and session_id and raw_ai_response:  # Check redis_conn from app.state
         try:
-            # Use the ORIGINAL user message dict for saving, not the contextual one
             new_history_entry = [
                 current_user_message_dict,
                 {"role": "assistant", "content": raw_ai_response},
             ]
             updated_history = loaded_history + new_history_entry
-            # Truncate
             if len(updated_history) > MAX_HISTORY_MESSAGES:
                 updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
-                print(f"History truncated to last {len(updated_history)} messages.")
-            # Save
+                print(f"DEBUG: History truncated to {len(updated_history)} messages.")
+
             history_to_save_json = json.dumps(updated_history)
+            print(
+                f"DEBUG: Attempting to save history for session {session_id[-6:]}. Size: {len(updated_history)} messages."
+            )
+            # Use connection from app.state
             await redis_conn.set(
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
-            print(
-                f"Saved history ({len(updated_history)} msgs) to session {session_id[-6:]}"
-            )
+            print(f"DEBUG: History save successful for session {session_id[-6:]}.")
         except Exception as e:
-            print(f"Redis SET error: {e}. History not saved.")
+            print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
 
     # --- Set Cookie ---
-    if is_new_session and session_id and redis_conn:
+    if is_new_session and session_id and redis_conn:  # Check redis_conn from app.state
+        print(f"DEBUG: Setting cookie for new session {session_id[-6:]}...")
         response.set_cookie(
             key="chatbotSessionId",
             value=session_id,
@@ -643,29 +637,36 @@ Your concise answer:"""
             path="/",
             # , secure=True # UNCOMMENT FOR HTTPS
         )
-        print(f"Set session cookie for new session {session_id[-6:]}")
 
+    print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
     return {"response": final_response_content}
 
 
 # --- Health Check Endpoint ---
 @app.get("/api/health")
-async def health_check():
-    global redis_conn
+async def health_check(request: Request):  # Add request to access app.state
+    # Get redis_conn from app.state
+    redis_conn_state = request.app.state.redis_conn
     redis_status = "not_initialized"
-    if redis_conn:
+    if redis_conn_state:
         try:
-            await redis_conn.ping()
+            await redis_conn_state.ping()  # Ping using the connection from state
             redis_status = "connected"
-        except Exception:
+        except Exception as e:
+            print(f"Health Check Redis Ping Error: {e}")
             redis_status = "error_connecting"
+    else:
+        redis_status = "conn_object_none_in_state"  # More specific
+    print(f"Health Check: Redis Status = {redis_status}")
     return {
-        "status": "OK_V2_fixed",
+        "status": "OK_V2_appstate",
         "redis_status": redis_status,
-    }  # Added _fixed to status for testing deploy
+    }  # Changed status for testing
 
 
 # --- Optional: To Run Directly ---
 # if __name__ == "__main__":
 #     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
+#     # Recommended way to run for production is without --reload
+#     # Use a process manager like systemd or supervisor to manage Uvicorn
+#     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=4, lifespan="on")
