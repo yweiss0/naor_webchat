@@ -26,26 +26,14 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 if REDIS_PASSWORD:
     REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-    print("Redis configured WITH password.")
+    print("Config: Redis URL uses password.")
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-    print("Redis configured WITHOUT password.")
+    print("Config: Redis URL does not use password.")
 
 SESSION_TTL_SECONDS = 3 * 60 * 60  # 3 hours
 MAX_HISTORY_PAIRS = 10
 MAX_HISTORY_MESSAGES = MAX_HISTORY_PAIRS * 2
-
-# --- Initialize OpenAI Client (can stay global or move to lifespan/app.state too) ---
-openai_client = None  # Initialize
-if not OPENAI_API_KEY:
-    print("Error: OPENAI_API_KEY not found in environment variables!")
-else:
-    try:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        print("OpenAI client initialized successfully.")
-    except Exception as e:
-        print(f"Error initializing OpenAI client: {e}")
-        openai_client = None
 
 
 # --- Pydantic Models ---
@@ -53,40 +41,36 @@ class QueryRequest(BaseModel):
     message: str
 
 
-# --- Lifespan Context Manager (Using app.state) ---
+# --- Lifespan Context Manager (Handles ALL Client Initialization) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize state attributes to None
+    # Initialize state attributes to None first
     app.state.redis_conn = None
-    app.state.openai_client = None  # Also manage openai client here for consistency
+    app.state.openai_client = None
 
     print("Lifespan: Initializing resources...")
+    # Initialize Redis client
     try:
-        # Initialize Redis client
         redis_connection = redis.Redis.from_url(
             REDIS_URL, encoding="utf-8", decode_responses=True
         )
-        # *** Removed ping() from startup ***
-        # Store the connection object on app.state
+        await redis_connection.ping()  # Test connection here is okay within lifespan start
         app.state.redis_conn = redis_connection
-        print("Lifespan: Redis client created (connection test deferred).")
+        print("Lifespan: Redis client created and connected.")
+    except Exception as e:
+        print(f"Lifespan Startup Error: Could not connect to Redis: {e}")
+        app.state.redis_conn = None  # Ensure it's None on failure
 
-        # Initialize OpenAI client (can also be done here)
-        if OPENAI_API_KEY:
+    # Initialize OpenAI client *inside lifespan*
+    if OPENAI_API_KEY:
+        try:
             app.state.openai_client = OpenAI(api_key=OPENAI_API_KEY)
             print("Lifespan: OpenAI client created.")
-        else:
-            print(
-                "Lifespan Warning: OPENAI_API_KEY not found, OpenAI client not created."
-            )
-
-    except Exception as e:
-        print(f"Lifespan Startup Error: Could not initialize resources: {e}")
-        # Ensure connections are None if setup fails
-        if app.state.redis_conn:
-            await app.state.redis_conn.close()  # Attempt close if object was created
-            app.state.redis_conn = None
-        app.state.openai_client = None
+        except Exception as e:
+            print(f"Lifespan Startup Error: Could not initialize OpenAI client: {e}")
+            app.state.openai_client = None
+    else:
+        print("Lifespan Warning: OPENAI_API_KEY not found, OpenAI client not created.")
 
     yield  # App runs here
 
@@ -94,7 +78,6 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "redis_conn") and app.state.redis_conn:
         await app.state.redis_conn.close()
         print("Lifespan: Redis connection closed.")
-    # No explicit close needed for OpenAI client typically
     print("Lifespan: Shutdown complete.")
 
 
@@ -310,9 +293,7 @@ available_tools = [stock_price_function, web_search_function]
 # --- Core Logic ---
 
 
-async def needs_web_search(
-    user_query: str, client: OpenAI
-) -> bool:  # Pass client explicitly
+async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
     recall_keywords = [
@@ -322,7 +303,8 @@ async def needs_web_search(
         "previous",
         "before",
         "stock name i asked",
-    ]
+        "which stock",
+    ]  # Added "which stock"
     if len(query_lower.split()) < 12 and any(
         key in query_lower for key in recall_keywords
     ):
@@ -331,7 +313,7 @@ async def needs_web_search(
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
-        return False  # Cannot classify without client
+        return False
     try:
         classification_messages = [
             {
@@ -368,8 +350,8 @@ async def needs_web_search(
 
 
 async def handle_tool_calls(
-    response_message, user_query: str, messages_history: list, client: OpenAI
-) -> str:  # Pass client
+    response_message, user_query: str, messages_history: list, client: OpenAI | None
+) -> str:
     if not client:
         return "Error: OpenAI client not available."
     tool_calls = response_message.tool_calls
@@ -442,17 +424,15 @@ async def handle_tool_calls(
 # --- /api/chat Endpoint (Uses app.state) ---
 @app.post("/api/chat")
 async def chat(query: QueryRequest, request: Request, response: Response):
-    # Get resources from app.state
     redis_conn = request.app.state.redis_conn
-    client = request.app.state.openai_client  # Get client from state
+    client = request.app.state.openai_client
 
-    # Check if resources are available
     if not client:
         raise HTTPException(
             status_code=503, detail="OpenAI client not available (init error?)"
         )
     if not redis_conn:
-        print("DEBUG: WARNING - Redis connection is NOT available!")  # Log but proceed
+        print("DEBUG: WARNING - Redis connection is NOT available for this request!")
 
     user_query = query.message
     session_id = request.cookies.get("chatbotSessionId")
@@ -466,10 +446,9 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     print(f"DEBUG: Cookie 'chatbotSessionId' value: {session_id}")
 
     # --- Load History ---
-    if redis_conn and session_id:  # Check redis_conn from app.state
+    if redis_conn and session_id:
         print(f"DEBUG: Attempting to load history for session {session_id[-6:]}...")
         try:
-            # Use the connection from app.state
             history_json = await redis_conn.get(session_id)
             if history_json:
                 loaded_history = json.loads(history_json)
@@ -483,9 +462,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     print(f"DEBUG: Successfully loaded {len(loaded_history)} messages.")
                     if loaded_history:
                         print(f"DEBUG: Last loaded msg: {loaded_history[-1]}")
-                    await redis_conn.expire(
-                        session_id, SESSION_TTL_SECONDS
-                    )  # Reset TTL
+                    await redis_conn.expire(session_id, SESSION_TTL_SECONDS)
             else:
                 print(f"DEBUG: Session ID {session_id[-6:]} not found in Redis.")
                 session_id = None
@@ -498,10 +475,9 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             print(
                 f"DEBUG: ERROR - Redis GET/EXPIRE failed: {e}. Proceeding without history."
             )
-            # History remains empty
 
     # --- Create New Session ID ---
-    if redis_conn and not session_id:  # Check redis_conn from app.state
+    if redis_conn and not session_id:
         is_new_session = True
         session_id = str(uuid.uuid4())
         print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
@@ -519,7 +495,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     messages_sent_to_openai = []
 
     try:
-        # Pass the client from app.state to functions that need it
         search_needed = await needs_web_search(user_query, client)
         system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
@@ -538,13 +513,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             }
             messages_sent_to_openai = base_messages + [contextual_user_message_dict]
             print("DEBUG: Making LLM call with History + Search Results...")
-
         else:
             print("DEBUG: Web search determined NOT needed.")
             messages_sent_to_openai = base_messages + [current_user_message_dict]
             print("DEBUG: Making LLM call with History + Current Query...")
 
-        # Log messages being sent
         print(
             f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
         )
@@ -553,7 +526,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             if len(messages_sent_to_openai) > 1:
                 print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
 
-        # Use client from app.state
         openai_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages_sent_to_openai,
@@ -561,11 +533,9 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             tool_choice="auto",
         )
 
-        # Process response
         response_message = openai_response.choices[0].message
         if response_message.tool_calls:
             print(f"DEBUG: Tool call(s) requested...")
-            # Pass client from app.state to tool handler
             raw_ai_response = await handle_tool_calls(
                 response_message, user_query, messages_sent_to_openai, client
             )
@@ -575,7 +545,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
             )
 
-        # Format final response
         if not raw_ai_response:
             print("DEBUG: ERROR - No final content generated.")
             final_response_content = "I encountered an issue."
@@ -602,7 +571,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
-    if redis_conn and session_id and raw_ai_response:  # Check redis_conn from app.state
+    if redis_conn and session_id and raw_ai_response:
         try:
             new_history_entry = [
                 current_user_message_dict,
@@ -617,7 +586,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             print(
                 f"DEBUG: Attempting to save history for session {session_id[-6:]}. Size: {len(updated_history)} messages."
             )
-            # Use connection from app.state
             await redis_conn.set(
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
@@ -626,7 +594,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
 
     # --- Set Cookie ---
-    if is_new_session and session_id and redis_conn:  # Check redis_conn from app.state
+    if is_new_session and session_id and redis_conn:
         print(f"DEBUG: Setting cookie for new session {session_id[-6:]}...")
         response.set_cookie(
             key="chatbotSessionId",
@@ -635,7 +603,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             httponly=True,
             samesite="Lax",
             path="/",
-            # , secure=True # UNCOMMENT FOR HTTPS
+            secure=True,  # *** ENSURE THIS IS UNCOMMENTED FOR HTTPS ***
         )
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
@@ -644,29 +612,38 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
 # --- Health Check Endpoint ---
 @app.get("/api/health")
-async def health_check(request: Request):  # Add request to access app.state
-    # Get redis_conn from app.state
+async def health_check(request: Request):
     redis_conn_state = request.app.state.redis_conn
+    openai_client_state = request.app.state.openai_client
     redis_status = "not_initialized"
+    openai_status = "not_initialized"
+
     if redis_conn_state:
         try:
-            await redis_conn_state.ping()  # Ping using the connection from state
+            await redis_conn_state.ping()
             redis_status = "connected"
         except Exception as e:
             print(f"Health Check Redis Ping Error: {e}")
             redis_status = "error_connecting"
     else:
-        redis_status = "conn_object_none_in_state"  # More specific
-    print(f"Health Check: Redis Status = {redis_status}")
+        redis_status = "conn_object_none_in_state"
+
+    if openai_client_state:
+        openai_status = "initialized"
+    else:
+        openai_status = "client_object_none_in_state"
+
+    print(
+        f"Health Check: Redis Status = {redis_status}, OpenAI Status = {openai_status}"
+    )
     return {
-        "status": "OK_V2_appstate",
+        "status": "OK_V2_secure_cookie",
         "redis_status": redis_status,
-    }  # Changed status for testing
+        "openai_status": openai_status,
+    }
 
 
 # --- Optional: To Run Directly ---
 # if __name__ == "__main__":
 #     import uvicorn
-#     # Recommended way to run for production is without --reload
-#     # Use a process manager like systemd or supervisor to manage Uvicorn
 #     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=4, lifespan="on")
