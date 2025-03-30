@@ -44,24 +44,19 @@ class QueryRequest(BaseModel):
 # --- Lifespan Context Manager (Handles ALL Client Initialization) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize state attributes to None first
     app.state.redis_conn = None
     app.state.openai_client = None
-
     print("Lifespan: Initializing resources...")
-    # Initialize Redis client
     try:
         redis_connection = redis.Redis.from_url(
             REDIS_URL, encoding="utf-8", decode_responses=True
         )
-        await redis_connection.ping()  # Test connection here is okay within lifespan start
+        await redis_connection.ping()
         app.state.redis_conn = redis_connection
         print("Lifespan: Redis client created and connected.")
     except Exception as e:
         print(f"Lifespan Startup Error: Could not connect to Redis: {e}")
-        app.state.redis_conn = None  # Ensure it's None on failure
-
-    # Initialize OpenAI client *inside lifespan*
+        app.state.redis_conn = None
     if OPENAI_API_KEY:
         try:
             app.state.openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -70,10 +65,8 @@ async def lifespan(app: FastAPI):
             print(f"Lifespan Startup Error: Could not initialize OpenAI client: {e}")
             app.state.openai_client = None
     else:
-        print("Lifespan Warning: OPENAI_API_KEY not found, OpenAI client not created.")
-
-    yield  # App runs here
-
+        print("Lifespan Warning: OPENAI_API_KEY not found.")
+    yield
     print("Lifespan: Shutting down resources...")
     if hasattr(app.state, "redis_conn") and app.state.redis_conn:
         await app.state.redis_conn.close()
@@ -81,23 +74,22 @@ async def lifespan(app: FastAPI):
     print("Lifespan: Shutdown complete.")
 
 
-app = FastAPI(lifespan=lifespan)  # Register lifespan manager
+app = FastAPI(lifespan=lifespan)
 
-# CORS configuration (Keep as is)
+# --- CORS configuration (Specific origins for credentialed requests) ---
 origins = [
-    "http://localhost:5173",
-    "https://localhost",
-    "https://nextdawnai.cloud",
-    "https://nextaisolutions.cloud",
-    "*",
+    "http://localhost:5173",  # Local dev frontend
+    "https://nextaisolutions.cloud",  # PRODUCTION FRONTEND
+    # Add other specific origins if necessary
 ]
+# Note: Avoid "*" with allow_credentials=True in production if possible
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"https://.*\.nextaisolutions\.cloud$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,  # Use specific list
+    allow_credentials=True,  # MUST be True for cookies
+    allow_methods=["GET", "POST", "OPTIONS"],  # Be specific
+    allow_headers=["*"],  # Or specify needed headers like Content-Type
     expose_headers=["Content-Length", "X-Request-ID"],
     max_age=600,
 )
@@ -304,7 +296,7 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         "before",
         "stock name i asked",
         "which stock",
-    ]  # Added "which stock"
+    ]
     if len(query_lower.split()) < 12 and any(
         key in query_lower for key in recall_keywords
     ):
@@ -359,9 +351,7 @@ async def handle_tool_calls(
         return response_message.content or "Error: No tool calls or content."
 
     print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
-    messages_for_follow_up = messages_history + [
-        response_message
-    ]  # History up to assistant's request
+    messages_for_follow_up = messages_history + [response_message]
 
     for tool_call in tool_calls:
         function_name = tool_call.function.name
@@ -407,7 +397,6 @@ async def handle_tool_calls(
 
     print("DEBUG: Making follow-up LLM call with tool results...")
     try:
-        # Send history + request + results
         follow_up_response = client.chat.completions.create(
             model="gpt-4o-mini", messages=messages_for_follow_up
         )
@@ -445,7 +434,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     print(f"DEBUG: User Query: {user_query}")
     print(f"DEBUG: Cookie 'chatbotSessionId' value: {session_id}")
 
-    # --- Load History ---
+    # Load History
     if redis_conn and session_id:
         print(f"DEBUG: Attempting to load history for session {session_id[-6:]}...")
         try:
@@ -476,14 +465,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 f"DEBUG: ERROR - Redis GET/EXPIRE failed: {e}. Proceeding without history."
             )
 
-    # --- Create New Session ID ---
+    # Create New Session ID
     if redis_conn and not session_id:
         is_new_session = True
         session_id = str(uuid.uuid4())
         print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
         loaded_history = []
 
-    # --- Core Logic ---
+    # Core Logic
     if not is_related_to_stocks_crypto(user_query):
         print("Query not related. Returning restricted response.")
         return {
@@ -595,15 +584,17 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     # --- Set Cookie ---
     if is_new_session and session_id and redis_conn:
-        print(f"DEBUG: Setting cookie for new session {session_id[-6:]}...")
+        print(
+            f"DEBUG: Setting CROSS-ORIGIN cookie for new session {session_id[-6:]}..."
+        )  # Updated log message
         response.set_cookie(
             key="chatbotSessionId",
             value=session_id,
             max_age=SESSION_TTL_SECONDS,
             httponly=True,
-            samesite="Lax",
+            samesite="None",  # MUST be 'None' for cross-origin
             path="/",
-            secure=True,  # *** ENSURE THIS IS UNCOMMENTED FOR HTTPS ***
+            secure=True,  # MUST be True when SameSite=None
         )
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
@@ -637,10 +628,10 @@ async def health_check(request: Request):
         f"Health Check: Redis Status = {redis_status}, OpenAI Status = {openai_status}"
     )
     return {
-        "status": "OK_V2_secure_cookie",
+        "status": "OK_V2_cross_origin",
         "redis_status": redis_status,
         "openai_status": openai_status,
-    }
+    }  # Changed status
 
 
 # --- Optional: To Run Directly ---
