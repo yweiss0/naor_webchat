@@ -181,6 +181,7 @@ def is_related_to_stocks_crypto(query: str) -> bool:
         "semiconductor",
         "retail",
         "automotive",
+        "trade",
     ]
     query_lower = query.lower()
     if any(
@@ -239,13 +240,107 @@ def validate_usd_result(text: str) -> bool:
 def process_text(text: str) -> str:
     text = re.sub(r"```(json)?\s*", "", text)
     text = re.sub(r"\s*```", "", text)
-    suffix = "It’s always good to get advice from our professionals here at NRDX.com."
     text_stripped = text.strip()
-    if not text_stripped.endswith(suffix):
-        if text_stripped and text_stripped[-1] not in ".!?":
-            text_stripped += "."
-        text_stripped += f" {suffix}"
+    if text_stripped and text_stripped[-1] not in ".!?":
+        text_stripped += "."
     return text_stripped
+
+
+# --- New Function: Check if query is about current stock price ---
+async def is_stock_price_query(
+    user_query: str, client: OpenAI | None
+) -> tuple[bool, str]:
+    """
+    Determines if the query is specifically about current stock price and extracts the ticker.
+    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string)
+    """
+    if not client:
+        print("OpenAI client not available for stock price query classification.")
+        return (False, "")
+
+    print(f"Classifying if query is about current stock price: '{user_query}'")
+    try:
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock or cryptocurrency? 
+                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL"}
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": ""}""",
+            },
+            {
+                "role": "user",
+                "content": f'User Query: "{user_query}"',
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=classification_messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+
+        # Parse the response content
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip()
+            try:
+                result_json = json.loads(result_text)
+                is_price_query = result_json.get("is_price_query", False)
+                ticker = result_json.get("ticker", "").strip().upper()
+
+                print(
+                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}"
+                )
+                return (is_price_query, ticker)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not parse JSON response: {result_text}")
+                return (False, "")
+        else:
+            print(
+                "Warning: Could not parse classification response. Defaulting to False."
+            )
+            return (False, "")
+
+    except Exception as e:
+        print(f"Error during stock price query classification: {e}")
+        return (False, "")
+
+
+# --- Handle direct stock price queries ---
+async def handle_stock_price_query(
+    ticker: str, user_query: str, client: OpenAI | None
+) -> str:
+    """Handles direct stock price queries using Yahoo Finance."""
+    print(f"Handling direct stock price query for ticker: {ticker}")
+
+    price = get_stock_price(ticker)
+
+    # Create system prompt for formatting the response
+    system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Format the provided stock price information into a clear, helpful response. Ensure prices are presented in USD."
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": f"Original query: {user_query}\n\nStock data: The latest price for {ticker} is: {price}",
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+        )
+
+        final_content = response.choices[0].message.content
+        return final_content
+    except Exception as e:
+        print(f"Error formatting stock price response: {e}")
+        return f"The latest price for {ticker} is: {price}"
 
 
 # --- OpenAI Tool Definitions --- (Keep as they are)
@@ -484,63 +579,77 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     messages_sent_to_openai = []
 
     try:
-        search_needed = await needs_web_search(user_query, client)
-        system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
+        # First check if this is a direct stock price query
+        is_price_query, ticker = await is_stock_price_query(user_query, client)
 
-        base_messages = [{"role": "system", "content": system_prompt}] + loaded_history
-        current_user_message_dict = {"role": "user", "content": user_query}
-
-        if search_needed:
-            print("DEBUG: Web search determined NEEDED.")
-            search_result_text = duckduckgo_search(
-                f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
-            )
-            contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
-            contextual_user_message_dict = {
-                "role": "user",
-                "content": contextual_prompt_content,
-            }
-            messages_sent_to_openai = base_messages + [contextual_user_message_dict]
-            print("DEBUG: Making LLM call with History + Search Results...")
-        else:
-            print("DEBUG: Web search determined NOT needed.")
-            messages_sent_to_openai = base_messages + [current_user_message_dict]
-            print("DEBUG: Making LLM call with History + Current Query...")
-
-        print(
-            f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
-        )
-        if messages_sent_to_openai:
-            print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
-            if len(messages_sent_to_openai) > 1:
-                print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
-
-        openai_response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages_sent_to_openai,
-            tools=available_tools,
-            tool_choice="auto",
-        )
-
-        response_message = openai_response.choices[0].message
-        if response_message.tool_calls:
-            print(f"DEBUG: Tool call(s) requested...")
-            raw_ai_response = await handle_tool_calls(
-                response_message, user_query, messages_sent_to_openai, client
-            )
-        else:
-            raw_ai_response = response_message.content
-            print(
-                f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
-            )
-
-        if not raw_ai_response:
-            print("DEBUG: ERROR - No final content generated.")
-            final_response_content = "I encountered an issue."
-            raw_ai_response = None
-        else:
+        if is_price_query and ticker:
+            print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
+            raw_ai_response = await handle_stock_price_query(ticker, user_query, client)
             final_response_content = process_text(raw_ai_response)
-            print(f"DEBUG: Returning formatted response: {final_response_content}")
+            print(
+                f"DEBUG: Returning formatted stock price response: {final_response_content}"
+            )
+        else:
+            # Continue with the original flow - check if web search is needed
+            search_needed = await needs_web_search(user_query, client)
+            system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
+
+            base_messages = [
+                {"role": "system", "content": system_prompt}
+            ] + loaded_history
+            current_user_message_dict = {"role": "user", "content": user_query}
+
+            if search_needed:
+                print("DEBUG: Web search determined NEEDED.")
+                search_result_text = duckduckgo_search(
+                    f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
+                )
+                contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
+                contextual_user_message_dict = {
+                    "role": "user",
+                    "content": contextual_prompt_content,
+                }
+                messages_sent_to_openai = base_messages + [contextual_user_message_dict]
+                print("DEBUG: Making LLM call with History + Search Results...")
+            else:
+                print("DEBUG: Web search determined NOT needed.")
+                messages_sent_to_openai = base_messages + [current_user_message_dict]
+                print("DEBUG: Making LLM call with History + Current Query...")
+
+            print(
+                f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+            )
+            if messages_sent_to_openai:
+                print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
+                if len(messages_sent_to_openai) > 1:
+                    print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
+
+            openai_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages_sent_to_openai,
+                tools=available_tools,
+                tool_choice="auto",
+            )
+
+            response_message = openai_response.choices[0].message
+            if response_message.tool_calls:
+                print(f"DEBUG: Tool call(s) requested...")
+                raw_ai_response = await handle_tool_calls(
+                    response_message, user_query, messages_sent_to_openai, client
+                )
+            else:
+                raw_ai_response = response_message.content
+                print(
+                    f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
+                )
+
+            if not raw_ai_response:
+                print("DEBUG: ERROR - No final content generated.")
+                final_response_content = "I encountered an issue."
+                raw_ai_response = None
+            else:
+                final_response_content = process_text(raw_ai_response)
+                print(f"DEBUG: Returning formatted response: {final_response_content}")
 
     # Error Handling
     except BadRequestError as bre:
