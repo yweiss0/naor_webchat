@@ -754,12 +754,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         loaded_history = []
 
     # Core Logic
-    if not is_related_to_stocks_crypto(user_query):
-        print("Query not related. Returning restricted response.")
-        return {
-            "response": "I can only answer questions about stocks, cryptocurrency, or trading."
-        }
-
     final_response_content = ""
     raw_ai_response = None
     messages_sent_to_openai = []
@@ -774,7 +768,13 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             final_response_content = process_text(raw_ai_response)
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
         else:
-            # If no Q&A match, continue with the existing logic
+            # If no Q&A match, check if the query is related to stocks/crypto
+            if not is_related_to_stocks_crypto(user_query):
+                print("Query not related. Returning restricted response.")
+                return {
+                    "response": "I can only answer questions about stocks, cryptocurrency, or trading."
+                }
+
             # First check if this is a direct stock price query
             is_price_query, ticker = await is_stock_price_query(user_query, client)
 
