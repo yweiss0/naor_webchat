@@ -173,6 +173,7 @@ def get_stock_price(ticker: str) -> float | str:
 
 def duckduckgo_search(query: str, max_results: int = 5) -> str:
     print(f"DDG Search: '{query}'")
+    time_period_used = "unknown"
     try:
         with DDGS() as ddgs:
             # First try to get results from the last week
@@ -182,6 +183,7 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                     query, max_results=max_results, timelimit="w"  # 'w' for week
                 )
             ]
+            time_period_used = "last week"
 
             # If not enough results, try the last month
             if len(results) < 2:
@@ -192,6 +194,7 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                         query, max_results=max_results, timelimit="m"  # 'm' for month
                     )
                 ]
+                time_period_used = "last month"
 
                 # If still not enough results, try the last year
                 if len(results) < 2:
@@ -206,6 +209,7 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                             timelimit="y",  # 'y' for year
                         )
                     ]
+                    time_period_used = "last year"
 
             if not results:
                 return "No relevant information found."
@@ -223,6 +227,9 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                 else:
                     formatted_results.append(f"- {title}: {body}")
 
+            print(
+                f"DEBUG: Using search results from the {time_period_used} ({len(results)} results found)"
+            )
             return "\n".join(formatted_results)
     except Exception as e:
         print(f"DDG Error: {e}")
