@@ -251,7 +251,7 @@ def load_qa_file() -> dict:
     """Load the Q&A file and return a dictionary of questions and answers."""
     qa_dict = {}
     try:
-        with open("server/qna_output.txt", "r", encoding="utf-8") as file:
+        with open("qna_output.txt", "r", encoding="utf-8") as file:
             content = file.read()
             # Split by Q: to get individual Q&A pairs
             qa_pairs = content.split("Q: ")
