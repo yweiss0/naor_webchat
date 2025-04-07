@@ -246,6 +246,103 @@ def process_text(text: str) -> str:
     return text_stripped
 
 
+# --- Q&A File Functions ---
+def load_qa_file() -> dict:
+    """Load the Q&A file and return a dictionary of questions and answers."""
+    qa_dict = {}
+    try:
+        with open("server/qna_output.txt", "r", encoding="utf-8") as file:
+            content = file.read()
+            # Split by Q: to get individual Q&A pairs
+            qa_pairs = content.split("Q: ")
+            for pair in qa_pairs[1:]:  # Skip the first empty element
+                if "A: " in pair:
+                    question, answer = pair.split("A: ", 1)
+                    # Clean up the question and answer
+                    question = question.strip()
+                    answer = answer.strip()
+                    qa_dict[question] = answer
+        print(f"Loaded {len(qa_dict)} Q&A pairs from file.")
+        return qa_dict
+    except Exception as e:
+        print(f"Error loading Q&A file: {e}")
+        return {}
+
+
+async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, str]:
+    """
+    Check if the user query matches a question in the Q&A file.
+    Returns a tuple of (is_match, answer_or_empty_string)
+    """
+    if not client:
+        print("OpenAI client not available for Q&A matching.")
+        return (False, "")
+
+    # Load the Q&A file
+    qa_dict = load_qa_file()
+    if not qa_dict:
+        print("Q&A dictionary is empty, cannot find match.")
+        return (False, "")
+
+    print(f"Checking if query matches Q&A file: '{user_query}'")
+    try:
+        # Create a prompt for the LLM to find the best match
+        qa_text = "\n\n".join([f"Q: {q}\nA: {a}" for q, a in qa_dict.items()])
+
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """You are a helpful assistant that matches user questions to predefined Q&A pairs.
+                Analyze the user query and determine if it matches any of the questions in the provided Q&A pairs.
+                If there's a match, respond with the exact answer from the Q&A pair.
+                If there's no match, respond with 'NO_MATCH'.
+                
+                Consider semantic similarity, not just exact matches. The user might phrase the question differently
+                but be asking about the same topic.""",
+            },
+            {
+                "role": "user",
+                "content": f"""User Query: "{user_query}"
+
+Q&A Pairs:
+{qa_text}
+
+If there's a match, provide ONLY the exact answer from the matching Q&A pair.
+If there's no match, respond with ONLY 'NO_MATCH'.""",
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=classification_messages,
+            temperature=0.0,
+        )
+
+        # Parse the response content
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip()
+
+            if result_text == "NO_MATCH":
+                print("No Q&A match found for the query.")
+                return (False, "")
+            else:
+                print("Q&A match found for the query.")
+                return (True, result_text)
+        else:
+            print(
+                "Warning: Could not parse Q&A matching response. Defaulting to no match."
+            )
+            return (False, "")
+
+    except Exception as e:
+        print(f"Error during Q&A matching: {e}")
+        return (False, "")
+
+
 # --- New Function: Check if query is about current stock price ---
 async def is_stock_price_query(
     user_query: str, client: OpenAI | None
@@ -668,77 +765,97 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     messages_sent_to_openai = []
 
     try:
-        # First check if this is a direct stock price query
-        is_price_query, ticker = await is_stock_price_query(user_query, client)
+        # First check if the query matches a question in the Q&A file
+        qa_match, qa_answer = await find_qa_match(user_query, client)
 
-        if is_price_query and ticker:
-            print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
-            raw_ai_response = await handle_stock_price_query(ticker, user_query, client)
+        if qa_match:
+            print(f"DEBUG: Q&A match found, using predefined answer.")
+            raw_ai_response = qa_answer
             final_response_content = process_text(raw_ai_response)
-            print(
-                f"DEBUG: Returning formatted stock price response: {final_response_content}"
-            )
+            print(f"DEBUG: Returning Q&A answer: {final_response_content}")
         else:
-            # Continue with the original flow - check if web search is needed
-            search_needed = await needs_web_search(user_query, client)
-            system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
+            # If no Q&A match, continue with the existing logic
+            # First check if this is a direct stock price query
+            is_price_query, ticker = await is_stock_price_query(user_query, client)
 
-            base_messages = [
-                {"role": "system", "content": system_prompt}
-            ] + loaded_history
-            current_user_message_dict = {"role": "user", "content": user_query}
-
-            if search_needed:
-                print("DEBUG: Web search determined NEEDED.")
-                search_result_text = duckduckgo_search(
-                    f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
+            if is_price_query and ticker:
+                print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
+                raw_ai_response = await handle_stock_price_query(
+                    ticker, user_query, client
                 )
-                contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
-                contextual_user_message_dict = {
-                    "role": "user",
-                    "content": contextual_prompt_content,
-                }
-                messages_sent_to_openai = base_messages + [contextual_user_message_dict]
-                print("DEBUG: Making LLM call with History + Search Results...")
-            else:
-                print("DEBUG: Web search determined NOT needed.")
-                messages_sent_to_openai = base_messages + [current_user_message_dict]
-                print("DEBUG: Making LLM call with History + Current Query...")
-
-            print(
-                f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
-            )
-            if messages_sent_to_openai:
-                print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
-                if len(messages_sent_to_openai) > 1:
-                    print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
-
-            openai_response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_sent_to_openai,
-                tools=available_tools,
-                tool_choice="auto",
-            )
-
-            response_message = openai_response.choices[0].message
-            if response_message.tool_calls:
-                print(f"DEBUG: Tool call(s) requested...")
-                raw_ai_response = await handle_tool_calls(
-                    response_message, user_query, messages_sent_to_openai, client
-                )
-            else:
-                raw_ai_response = response_message.content
-                print(
-                    f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
-                )
-
-            if not raw_ai_response:
-                print("DEBUG: ERROR - No final content generated.")
-                final_response_content = "I encountered an issue."
-                raw_ai_response = None
-            else:
                 final_response_content = process_text(raw_ai_response)
-                print(f"DEBUG: Returning formatted response: {final_response_content}")
+                print(
+                    f"DEBUG: Returning formatted stock price response: {final_response_content}"
+                )
+            else:
+                # Continue with the original flow - check if web search is needed
+                search_needed = await needs_web_search(user_query, client)
+                system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
+
+                base_messages = [
+                    {"role": "system", "content": system_prompt}
+                ] + loaded_history
+                current_user_message_dict = {"role": "user", "content": user_query}
+
+                if search_needed:
+                    print("DEBUG: Web search determined NEEDED.")
+                    search_result_text = duckduckgo_search(
+                        f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
+                    )
+                    contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
+                    contextual_user_message_dict = {
+                        "role": "user",
+                        "content": contextual_prompt_content,
+                    }
+                    messages_sent_to_openai = base_messages + [
+                        contextual_user_message_dict
+                    ]
+                    print("DEBUG: Making LLM call with History + Search Results...")
+                else:
+                    print("DEBUG: Web search determined NOT needed.")
+                    messages_sent_to_openai = base_messages + [
+                        current_user_message_dict
+                    ]
+                    print("DEBUG: Making LLM call with History + Current Query...")
+
+                print(
+                    f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+                )
+                if messages_sent_to_openai:
+                    print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
+                    if len(messages_sent_to_openai) > 1:
+                        print(
+                            f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
+                        )
+
+                openai_response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages_sent_to_openai,
+                    tools=available_tools,
+                    tool_choice="auto",
+                )
+
+                response_message = openai_response.choices[0].message
+                if response_message.tool_calls:
+                    print(f"DEBUG: Tool call(s) requested...")
+                    raw_ai_response = await handle_tool_calls(
+                        response_message, user_query, messages_sent_to_openai, client
+                    )
+                else:
+                    raw_ai_response = response_message.content
+                    print(
+                        f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
+                    )
+
+                if not raw_ai_response:
+                    print("DEBUG: ERROR - No final content generated.")
+                    final_response_content = "I encountered an issue."
+                    raw_ai_response = None
+                else:
+                    final_response_content = process_text(raw_ai_response)
+                    print(
+                        f"DEBUG: Returning formatted response: {final_response_content}"
+                    )
 
     # Error Handling
     except BadRequestError as bre:

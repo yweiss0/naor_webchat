@@ -1,0 +1,375 @@
+Q: Who are the people behind NRDX?
+A: Our young and professional team has been purposefully put together to be as multicultural as possible so that you can benefit from international and extensive banking and financial market experience.
+With our experience, competence and focus on the needs of our traders, we are continuously improving our processes, the scope of our services and our product portfolio.
+A central theme in this development is therefore also the right to fair and direct communication with clients, employees and partners. Learn more about the team. https://www.nrdx.com/en/company/about-us/
+
+Q: Why to trust NRDX?
+A: For us at NRDX, the right to fair and direct communication with clients, employees and partners is part of our understanding of honesty and transparency.
+We have been operating successfully as a Stocks and CFDs broker according to this principle since our foundation in 2024
+With our reliable way of offering customers a unique trading experience, our company has been able to establish an excellent reputation in Germany over the past ten years.
+This positive reputation is not only reflected in trade publications such as Handelsblatt or FAZ, but also in numerous awards for personal customer service as well as high customer satisfaction on the service rating portals of Trustpilot and Google.
+
+Q: How to contact?
+A: Your questions, comments and feedback are always welcome at NRDX. Get in touch with the team today, fill out and submit the form or reach us through our live chat. https://www.nrdx.com/en/company/contact-us/
+You can also email us here support@nrdx.com
+Call us at
+357 25775100  -  Cyprus Office
+or reach us through our live chat.
+
+Q: Where to meet?
+A: We are on the road every year at many events in Germany and around the world. Meet us at financial exhibitions and get to know us personally. You can also arrange a meeting with us at any time in one of our offices.
+We would also be very happy if you visited us on our social media channels on Facebook, Instagram, Linkedin or YouTube. There you will always find the latest news from our company and all important information about what is happening on the global financial markets.
+
+Q: Where is NRDX licenced / regulated?
+A: 
+
+Q: What products and services does NRDX offer?
+A: NRDX offers access to the US Stocks open market and a wide range of 300 CFD trading instruments from forex, indices, metals, equities, energies, commodities and cryptocurrencies via the world's most popular trading platforms NRDX Trader and MetaTrader 5.
+In addition, we offer access to our advanced trading tools which can help our traders to optimize their trading strategy, as well to join our educational webinars on a weekly basis.
+
+Q: How to trade with 1:300 leverage?
+A: Retail investors can trade with leverage up to 1:30. If you wish to trade with higher leverage you must qualify to be recategorised as Proffessional client. The application form to check your eligibility for a  professional client is available in our NRDX trader portal. To do so, please log in to our
+
+Q: What are the swap rates at NRDX?
+A: https://www.nrdx.com/en/accounts/trading-conditions/
+At NRDX we place great emphasis on transparency, so you can find any information on the exact swap rates of all instruments.
+
+Q: Which trading platform is connected with NRDX?
+A: NRDX offers you NRDX Trader and MetaTrader 5, the world's most popular trading software for Stocks and CFD trading. They combine a user-friendly interface with powerful functions and tools.
+The software has efficient and comprehensive analysis tools as well as indicators for technical chart analyses of exchange rate movements.
+
+Q: How can the adopted technology provide the best execution on my trades?
+A: VPS (Virtual Private Server) hosting allows strategies of automated trading systems, including Expert Advisors (EA), to run 24 hours a day, 5 days a week on a virtual server in a powerful data center. The big advantage is that your own computer doesn’t have to run 24/7 at home. Moreover, you are not dependent on your Internet and power connection.
+Additionally, our offered VPS solution significantly minimizes the execution time of your orders, as our MetaTrader servers are located in the same data center.
+
+Q: Are the platforms compatible with Mac?
+A: https://www.nrdx.com/en/platforms/metatrader5/
+MetaTrader platforms installation is not compatible on all Mac versions anymore. However, with our MT5 Web Trader Extension, it is possible to trade from any device and connection with internet, including Mac devices.
+Yes, our NRDX Trader and MetaTrader 5 platforms are also compatible with Mac. It is also possible to use our MT5 Web Trader Extension, to trade on all internet-enabled products, including Mac devices.
+
+Q: How do I change my NRDX Trader and MT5 Password?
+A: You are welcome to change the password of your NRDX Trader or MT5 account directly in the NRDX Trader Portal.
+To do so, click on "My Account" → "Personal Details" → "Set New password" in the left menu
+
+Q: Why I cannot open a trade on MT5? The 'New Order' button appears inactive.
+A: It's possible that you've used the "Investor Password" instead of the "Trading Password." To rectify this, you'll need to relink your account using the correct password. The "Trading Password" can be found in your registration email or within the NRDX Trader Portal under MyAccount → Personal Details.
+This should resolve the issue and enable you to open trades successfully.
+
+Q: I cannot trade, Invalid Account is displayed on the NRDX Trader or MT5 account.
+A: To do this, we recommend rescanning the server and linking the live account again.
+Click on "File" → "Open account".
+Click on the "+" sign and paste "NRDX-Live".
+Click "Scan" and wait until you see the green check mark in front of the server name
+Then click on the NRDX-Live server → "Next"
+Select "Existing trading account" and enter the account number and password → "Finish".
+Please pay attention to spaces etc in the password. It is best to copy the password directly from the passwords email or from the client portal and paste it here.
+
+Q: I have forgotten my NRDX Trader or MT5 Password, what can I do?
+A: Is more Secure to reset the Password
+To do this, click on "My Account" → "Personal Details" → "Set New password".
+To link the account, click "File" → "Account Login" /"Trading Account Login" (MT5) in the NRDX Trader or MT5 platform and enter the live account credentials again.
+
+Q: I only see a small number of symbols in the market watch window.
+A: By default, only a few symbols appear.
+But if you click in the market overview (right click) → Symbols → you will find all trading instruments.
+If you then click on the desired instrument group and on "Show", all symbols from the group will be visible in the market overview.
+If you click on the "+" sign and select individual symbols by double-clicking or click + "Show", they will be visible in the market overview.
+
+Q: My charts do not work, waiting for update is displayed, what should I do?
+A: https://www.nrdx.com/en/platforms/compare/
+In this case you would need to reinstall the trading platform. Download trading platform.
+
+Q: What is Margin?
+A: Margin is the deposit required to use leveraged products such as CFDs. Thus, a margin is the amount required to open and maintain a leveraged trading position.
+It is the difference between the full value of your position and the capital provided to you by a broker or leverage provider. Using leverage can allow you to achieve full market exposure by putting up only a fraction of the full value of a trade. The required margin is usually expressed as a percentage.
+The required margin is usually expressed as a percentage.
+
+Q: What Trading Platforms are available?
+A: With our excellent trading platforms NRDX Trader and MetaTrader 5 (MT5) you get professional access to the global financial markets.
+
+Q: Can I withdraw via a different payment method from the one I used to deposit?
+A: For all withdrawal requests we follow a specific policy to forward the requested funds through the same funding method used to deposit.
+
+Q: Do you apply charges on deposits and withdrawals?
+A: https://www.nrdx.com/en/accounts/deposits-withdrawals-methods/
+We have some PSPs charges depends on which bank or way to payment. 
+In the event of a withdrawal transfer is cancelled/returned by your bank, fees may be applied.
+For comprehensive information about the deposit and withdrawal methods we offer, please visit the "Deposits and Withdrawals" page on our website.
+
+Q: How can I cancel a withdrawal request?
+A: If you submit a withdrawal request and later decide that you do not want it processed, you are able to cancel it yourself.
+To cancel the withdrawal, log into NRDX Trader Portal profile and select ‘Funds -> Withdrawalw on your left-hand side.
+A pop up window will open!
+Simply click on the ‘Cancel’ option next to your withdrawal request.
+
+Q: How can I deposit funds into my account?
+A: https://www.nrdx.com/en/accounts/deposits-withdrawals-methods/
+To deposit, log into NRDX Trader Portal profile and select ‘Funds -> Deposit on your left-hand side.
+You can make a deposit via  NRDX Trader Portal profile using one of the supported methods.
+For more information regarding the supported payment methods and fees please visit the "Payment Methods" page on our website.
+
+Q: How do I make a withdrawal?
+A: www.nrdx.com
+Withdrawals are requested from NRDX Trader Portal. Click here to Log in.
+You can only withdraw the amount available in your NRDX Trader and/or MT5 Free Margin.
+If you have open trades and withdraw all of your free margin, it’s likely your trades will be liquidated as they will reach a Stop Out level.
+Therefore, if you hold open trades, please ensure you leave enough money in your free margin to support any open trades on the market.
+Profits can be withdrawn via any payment method registered under your name.
+For any queries, feel free to contact our Customer Support team via Live chat, email  support@nrdx.com or call us at  35725775100
+35725775100 -  Cyprus Office
+
+Q: How long does it take for my withdrawn funds to reach me?
+A: We process withdrawals within one business day.
+The timeframe required for the funds to reach your account varies based on the payment method you used:
+SEPA Transfers - 2 days
+Bank Wire – 3-5 days
+eWallets (ApplePay/GooglePay) - 1 day
+Visa/ Credit card - 3-5 days
+In case the relevant timeframe passed and the funds are yet to be received, please email us immediately at support@nrdx.com so we can investigate accordingly.
+
+Q: What is the minimum deposit?
+A: We offer two trading account types, the NRDX Basic and NRDX Premium.
+The minimum account opening requirement as follows:
+NRDX Basic, $10
+NRDX Premium, $10
+
+Q: What methods can I use to deposit and withdraw?
+A: https://www.nrdx.com/en/accounts/deposits-withdrawals-methods/
+Visit our "Payment Methods" page for the latest information on the deposit and withdrawal options we support. This comprehensive resource will guide you through the various methods available, ensuring you make an informed decision for your trading needs.
+
+Q: When will my withdrawal be processed?
+A: We process all withdrawal requests within one working day.
+
+Q: What does Spreads mean?
+A: In trading, the term spread refers to the difference between the buy (ask) and sell (bid) price of an asset. The spread is an important factor in derivatives trading and determines how derivatives - such as contracts for difference (CFDs) - are priced.
+
+Q: What does Margin, Free Margin, Margin Level, Swap means?
+A: Trading on margin means that you borrow funds from the broker to buy securities. You only pay a certain percentage (or margin) of the value. This allows you to trade beyond your available balance.
+Trading on margin allows you to trade beyond your available cash. You borrow money from the broker to do this.
+The free margin is the sum of your own capital that is not tied up in any position and that you can use for new positions in the market. But that is not all, because the free margin is also the difference between your equity and your already deposited margin.
+The margin level is the percentage of your equity in the collateral used. In other words, it is the ratio of equity to margin. Margin Level = (Equity/Margin Used) x 100.
+The swap is a typical trading fee in Forex and CFD trading. As they are leveraged derivatives, a financing fee (swap) of the trading position is required. The swap depends on the position size, asset, leverage and broker.
+
+Q: What are Margin Call and Stop Out?
+A: "Margin Call” shall mean the situation when the trading account of a Client does not have enough Margin to open new or maintain open positions, where the system does not allow to open new position and starts to close open position when margin level is below 10%.
+When the "stop-out" level is reached, the trade is closed at the first price available at the time of closing, which means that the final outcome may differ from the outcome expected based on the specified stop-out level.
+
+Q: What is a CFD?
+A: Contract for Difference (CFD) is the name of a derivative financial product that can be used to speculate on underlying securities (such as shares) without actually holding them. A derivative or derivative security is a security whose value or performance depends on the performance of one or more underlying assets.
+
+Q: What is leverage?
+A: Leverage means that you as a trader can move significantly more capital in the market with a leverage product than you actually invested when you bought the leverage product. Let's assume, for example, that you buy 100 CFDs that refer to a DAX share.
+The share listed in the DAX has the regular price of 100 EURO. If you were to buy the shares regularly, you would have to invest 10,000 Euros when buying 100 shares.
+However, if you buy the CFDs of the share listed in the DAX, you only have to invest 5% of the sum yourself.
+The rest is "lent" to you by the broker, so to speak. So you can buy 100 CFDS of the share and you only have to deposit 100 euros for it.
+In addition, there is a security deposit to be made, the so-called margin. The amount of the margin varies. In our example, we assume 5%.
+If the share price rises, the value of the position is 10,100 euros. You have thus made a profit of 100 euros.
+Since your stake was only 100 euros, you have actually achieved a return of 100% with this transaction.
+This is also applicable when the market conditions are not in your favor and thus you may lose 100 euros.
+
+Q: What is the formula to calculate Swap?
+A: To calculate the charges for Forex & Equities, please use this formula: (lots * Swap for Long or short in points)
+Here’s an example: Long (Buy) 0.01 Lot EURUSD, Swap rate for Long is -7.922 points.
+The end of day market rate is 1.19097 for EURUSD. The client’s account currency is EUR.
+Therefore, the Swap Rate Calculation is as follows: 0.01* (-7.922) / 1.19097 (conversion to account currency) = - €0.07.
+Here’s an example: Short (Sell) 0.2 Lots EURUSD.
+The Swap rate for Short is 5.3 points, and the client’s account currency USD.
+Therefore, the Swap Rate Calculation: 0.2 * 5.3 = $1.06
+
+Q: What is the formula used for calculating Margin?
+A: Margin calculation Dax (Margin requirement 5% = Leverage 1:20)
+Lots x current market price x 5% / 100% = Margin
+1 Lot x 13.998.5 x 5 / 100 = 699.925 EUR Margin for 1 Lot
+
+Q: Do you allow hedging?
+A: No, we do not allow hedging.
+
+Q: How can I become a Partner/Affiliate?
+A: https://track.marketingclicks101.com/signup/
+If you already have a registered account profile and want to become an approved Partner/Affiliate directly contact your personal account support manager.
+If you do not have a registered profile yet and would like to become an approved  Partner/Affiliate, firstly register an account profile on our website to start the process.
+If you would like to speak to one of our representatives, you can always contact us with your questions by email support@nrdx.com , or reach out to us via the WhatsApp or Telegram.
+For instant support send us a message here on Live Chat.
+
+Q: Partners Area and reporting tools.
+A: When your Partner / Affiliate application is approved, you can access to the Partner Area were you will find customized data analysis reports describing the volume traded, funds’ performance and other insightful data, including your referral link and marketing material for promotional purposes.
+
+Q: What types of Partnerships are available?
+A: https://www.nrdx.com/en/partners/
+NRDX partners with Affiliates who are approved to introduce their network of traders to a regulated investment firm like us. As a partner you will have a dedicated customer support team to help you grow your network and improve your monthly revenue.
+For more information read here.
+
+Q: Liquidity Distribution Services
+A: NRDX Prime is the institutional brand of NRDX Pty Ltd, focusing on the institutional services landscape.
+NRDX Prime serves its liquidity distribution services to banks, , hedge funds, corporate treasurers and money managers with direct market access to deep institutional liquidity under a stable regulatory and secure environment.
+
+Q: What is the partner margin account minimum funding requirement?
+A: We are offering a flexible starting amount with EUR/ USD / CHF 10,000 on the margin account.
+
+Q: What is the range of products?
+A: Our comprehensive spectrum of US Stocks and CFD instruments includes forex, indices, metals, equities, energies, commodities and cryptocurrencies.
+Direct access to the US Stock market
+Over 100 FX Pairs, Metals and Treasuries
+23 Indices, +200 Stocks, +20 Futures
+Energies like Oil and Gas
+Commodities like Cocoa, Coffee and more
+
+Q: What documents are required for a Corporate Application as a Partner?
+A: To process, review, and activate your Corporate Application as a Partner, the following documents are necessary:
+Certificate of Incorporation
+Certificate of Incumbency
+Certificate of Good Standing
+Certificate of Shareholders
+Certificate of Registered address
+Memorandum and Articles of Association
+Register of Directors
+Securities Dealer License
+AML/KYC Manual
+Recent Proof of Registered Address (valid within the last 6 months)
+Valid proof of identity for company directors (passport, identity card, or driving license – front and back sides)
+Proof of residence for company directors (utility bill, bank statement, or government-issued letter containing full name, address, and date – valid within the last 6 months)
+Completion of the NRDX Onboarding Questionnaire
+Completion of the NRDX Account Application
+Ensure you have these documents readily available to expedite the application process and begin your partnership with NRDX.
+
+Q: What are the benefits that distiguish NRDX Prime services?
+A: Our instant and multilingual 24 hour support service and dedicated account managers provide personal assistance, anytime during the day while customizing solutions to suit your needs:
+24 hours 5 days a week institutional support
+Same day onboarding process and configuration
+Top Management highly involved in the partnership
+Time priority order execution
+Deliver an absolute online trading experience
+Integrated with multiple trading technologies via API feed
+
+Q: Can I trade without providing my documents?
+A: In order to start trading Live, you need to have your documents on record and upload them in our platform. So, it’s not possible to trade without documents.
+The following documents are required for verification:
+•	One Proof of Residence document (i.e. Utility Bill, Bank Statement)
+•	A colored copy of your Identification Document (i.e. Passport or ID Card)
+Without documents you can only open a temporally Demo account.
+
+Q: Dormant Accounts
+A: A dormant account is an inactive account. An account can be inactive for several reasons:
+1.Verify Process Pending (Lack of identification documents)
+2.It doesn’t have any funds yet
+3.It’s an open account with no interaction yet.
+
+Q: For how long my demo account is valid?
+A: If you are demo account holder and your demo trading account has no activity longer than 3 weeks, then the demo account will be terminated.
+
+Q: How can I change the leverage in my NRDX Trader and MT5 account?
+A: It is possible to change the leverage in both platforms, NRDX Trader and MT5 in a very easy and simple way. 
+
+
+Keep in mind that these steps need to be done through our website www.NRDX.com
+Keep in mind that these steps need to be done through NRDX Trader portal.
+
+Q: How can I open a DEMO account?
+A: Go to www.NRDX.com – Click Try Account
+Fill in the data required:
+First Name
+Last Name
+Email
+Country Code
+Phone Number
+Accept our terms and conditions by clicking in the box
+Click on Register
+You will receive a welcome email (you might find it in Spam Folder)
+Click on the link in the email to confirm your email and to enter the client portal
+
+Q: How can I open a Basic account type?
+A: 
+
+Q: How do I change my address?
+A: In order to change your address we ask you to submit documents for POR (Proof of Residence) with a validity not longer than 6 months. Please go to the Upload Documents section below to upload the required documents.
+If you wish to change your details, please send a request to support@nrdx.com
+
+Q: How do I change my name?
+A: In order to change your Name we ask you to submit a copy of your Passport, ID or Driver’s License. Please go to the Upload Documents section below to upload the required documents.
+If you wish to change your details, please send a request to support@nrdx.com
+
+Q: How do I change my phone number?
+A: Log in into NRDX – Client Portal
+Click on My Profile
+In the Edit Details section click on Phone
+Update your phone number
+Click on Save
+
+Q: How many NRDX Trader and MT5 Accounts can I have?
+A: You can be able to open 1 account per each email address. It is not possible to open several accounts with the same email address.
+
+Q: How to open a trading account?
+A: 
+
+Q: What Account types are offered?
+A: With NRDX you can have 2 types of trading accounts: Demo and Live 
+There are two Live trading acccount types to select from, the Basic and Premium Accounts
+
+Q: What are the requirements to register an account?
+A: In order to start trading Live, you need to have your documents on record and upload them in our NRDX Trader client portal. So, it’s not possible to trade without documents.
+The following documents are required for verification:
+•	One Proof of Residence document (i.e. Utility Bill, Bank Statement)
+•	A colored copy of your Identification Document (i.e. Passport or ID Card)
+
+Q: Where can I access the NRDX Trader Portal?
+A: To find the access to the NRDX Trader Portal you need to access to www.NRDX.com
+
+Q: I can't access my account. What can I do?
+A: Make sure the username/email and password are correct and the keyboard set up for caps and low caps has been used correctly.
+If you still can´t have access to your account, you can send us an email to: support@nrdx.com
+
+Q: I forgot my password. What can I do?
+A: To create a new password, follow the next steps:
+1.	Click on Forgot password? Question
+2.	Enter your email register to recover your password
+3.	Click on Submit
+4.	You will receive an email with the instructions on how to reset your password.
+5.	Enter your new password and click on Submit.
+
+Q: How can I create a new NRDX Trader / MT5 account?
+A: To open a new demo account for MetaTrader, please follow the steps below:
+•	Go to NRDX Trader Portal
+•	Once you are logged into the portal, you can open a demo account by clicking on "New demo account".
+•	Select the platform you want NRDX Trader / 5
+•	Choose the currency you want
+•	Select the credit or click on "Enter another amount" and change the preferred amount.
+•	The standard leverage for a live account is 1:30
+•	Finally, confirm your request with your customer portal password and click on "Submit request".
+•	Once the account is opened, a pop-up window will appear with the login details: The trading account will be the login for the trading platform and the password (a normal one, for trading) and the investor password (for reading only).
+•	You can also find the login details below, where you can view or change the password.
+To open a new live account for MetaTrader please contact your account manager by email or phone.
+
+Q: I forgot my email register at the portal. What can I do?
+A: Please send us an email to: support@nrdx.com. We might ask for proof of identity.
+
+Q: My password is not valid. Why?
+A: Make sure the username/email and password are correct and the keyboard set up for caps and low caps has been used correctly.
+If you still can´t have access to your account, you can send us an email to: support@nrdx.com
+
+Q: I want to check my withdrawals and Transaction History, where can I check that?
+A: You can check your transaction history following these steps:
+1. Go to NRDX Trader Portal
+2. Click on My wallet
+3. Click on Transaction History
+4. Click on Type and then click on Withdrawal and click  Submit
+
+Q: I want to change my password and/or email in my NRDX Trader Portal account.
+A: To change your password and/or email at NRDX Trader Portal:
+•	Log in with your current email address and password in the NRDX Trader Portal
+•	Click on My profile – On the top menu on the left side of the screen
+1.	To change your email address:
+a)	Click on Email address on My Profile Section
+b)	Add a new email address as Email 2
+c)	Click on Submit
+d)	Verified the new email address with the email with the registration link
+e)	Assign the new email address as Primary by deleting the previous email address.
+2. To change your password:
+a)	Click on Password on My Profile Section
+b)	Enter current password on NRDX Trader Password section
+c)	Enter New NRDX Trader Password and confirm it
+d)	Click save
+e)	Note: The new password would apply only to NRDX Trader Portal, your trading account passwords will not been affect by this change.
+
+Q: How can I contact the support team?
+A: You can send us an email to: support@nrdx.com
+
