@@ -175,15 +175,53 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
     print(f"DDG Search: '{query}'")
     try:
         with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=max_results)]
+            # First try to get results from the last week
+            results = [
+                r
+                for r in ddgs.text(
+                    query, max_results=max_results, time="w"  # 'w' for week
+                )
+            ]
+
+            # If not enough results, try the last month
+            if len(results) < 2:
+                print("Not enough results from the last week, trying the last month...")
+                results = [
+                    r
+                    for r in ddgs.text(
+                        query, max_results=max_results, time="m"  # 'm' for month
+                    )
+                ]
+
+                # If still not enough results, try the last year
+                if len(results) < 2:
+                    print(
+                        "Not enough results from the last month, trying the last year..."
+                    )
+                    results = [
+                        r
+                        for r in ddgs.text(
+                            query, max_results=max_results, time="y"  # 'y' for year
+                        )
+                    ]
+
             if not results:
                 return "No relevant information found."
-            return "\n".join(
-                [
-                    f"- {res.get('title', 'No Title')}: {res.get('body', 'No snippet.')}"
-                    for res in results
-                ]
-            )
+
+            # Format results with dates if available
+            formatted_results = []
+            for res in results:
+                title = res.get("title", "No Title")
+                body = res.get("body", "No snippet.")
+                date = res.get("date", "")
+
+                # Add date to the result if available
+                if date:
+                    formatted_results.append(f"- {title} ({date}): {body}")
+                else:
+                    formatted_results.append(f"- {title}: {body}")
+
+            return "\n".join(formatted_results)
     except Exception as e:
         print(f"DDG Error: {e}")
         return "Error performing web search."
@@ -638,8 +676,16 @@ async def handle_tool_calls(
 
     print("DEBUG: Making follow-up LLM call with tool results...")
     try:
+        # Add a system message to emphasize the importance of current information
+        follow_up_messages = [
+            {
+                "role": "system",
+                "content": "You are a financial assistant. When providing information from web search results, always emphasize how current the information is. If the information is outdated (more than a few months old), clearly state that it may not reflect current market conditions. Always prioritize the most recent information available.",
+            }
+        ] + messages_for_follow_up
+
         follow_up_response = client.chat.completions.create(
-            model="gpt-4o-mini", messages=messages_for_follow_up
+            model="gpt-4o-mini", messages=follow_up_messages
         )
         final_content = follow_up_response.choices[0].message.content
         print(
