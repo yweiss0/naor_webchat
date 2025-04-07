@@ -179,7 +179,7 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
             results = [
                 r
                 for r in ddgs.text(
-                    query, max_results=max_results, time="w"  # 'w' for week
+                    query, max_results=max_results, timelimit="w"  # 'w' for week
                 )
             ]
 
@@ -189,7 +189,7 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                 results = [
                     r
                     for r in ddgs.text(
-                        query, max_results=max_results, time="m"  # 'm' for month
+                        query, max_results=max_results, timelimit="m"  # 'm' for month
                     )
                 ]
 
@@ -201,7 +201,9 @@ def duckduckgo_search(query: str, max_results: int = 5) -> str:
                     results = [
                         r
                         for r in ddgs.text(
-                            query, max_results=max_results, time="y"  # 'y' for year
+                            query,
+                            max_results=max_results,
+                            timelimit="y",  # 'y' for year
                         )
                     ]
 
