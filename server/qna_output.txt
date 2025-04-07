@@ -38,6 +38,11 @@ Q: Which trading platform is connected with NRDX?
 A: NRDX offers you NRDX Trader and MetaTrader 5, the world's most popular trading software for Stocks and CFD trading. They combine a user-friendly interface with powerful functions and tools.
 The software has efficient and comprehensive analysis tools as well as indicators for technical chart analyses of exchange rate movements.
 
+Q: What additional security does NRDX provide?
+A: https://www.nrdx.com/en/regulation/
+A separate insurance policy has been provided for NRDX' clients. This provides additional protection to clients who qualify under the Investor Compensation Fund for amounts in excess of EUR 20,000 up to a maximum of EUR 100,000 per client. This additional insurance policy is subject to the general terms and conditions and only comes into effect if the requirements for the ICF are met.
+The ICF covers the company's retail clients (including companies with retail clients status). Learn more about our collateral, regulations and licenses.
+
 Q: How can the adopted technology provide the best execution on my trades?
 A: VPS (Virtual Private Server) hosting allows strategies of automated trading systems, including Expert Advisors (EA), to run 24 hours a day, 5 days a week on a virtual server in a powerful data center. The big advantage is that your own computer doesn’t have to run 24/7 at home. Moreover, you are not dependent on your Internet and power connection.
 Additionally, our offered VPS solution significantly minimizes the execution time of your orders, as our MetaTrader servers are located in the same data center.
@@ -86,6 +91,10 @@ The required margin is usually expressed as a percentage.
 
 Q: What Trading Platforms are available?
 A: With our excellent trading platforms NRDX Trader and MetaTrader 5 (MT5) you get professional access to the global financial markets.
+
+Q: Where can I check the Trading Conditions such as Swap rate, required margin and trading hours?
+A: https://www.nrdx.com/en/accounts/trading-conditions/
+You can find the Trading Conditions such as swap rate, required margin and trading hours under the Accounts tab .
 
 Q: Can I withdraw via a different payment method from the one I used to deposit?
 A: For all withdrawal requests we follow a specific policy to forward the requested funds through the same funding method used to deposit.
@@ -140,6 +149,9 @@ Visit our "Payment Methods" page for the latest information on the deposit and w
 Q: When will my withdrawal be processed?
 A: We process all withdrawal requests within one working day.
 
+Q: Can I transfer funds from my wallet to my NRDX Trader and MT5?
+A: Yes, you can trasfer your funds from your trading account to your wallet, and then from your wallet to any trading account that you own.
+
 Q: What does Spreads mean?
 A: In trading, the term spread refers to the difference between the buy (ask) and sell (bid) price of an asset. The spread is an important factor in derivatives trading and determines how derivatives - such as contracts for difference (CFDs) - are priced.
 
@@ -184,6 +196,10 @@ Lots x current market price x 5% / 100% = Margin
 Q: Do you allow hedging?
 A: No, we do not allow hedging.
 
+Q: Where to apply to live webinar?
+A: https://www.nrdx.com/en/news-tools/webinars
+Click here to register for our free live webinars. Select the webinar and click on the "Register" button to get to the registration form which you have to fill in or use the "News & Tools" tab under the Analyses category to find the "NRDX Webinar".
+
 Q: How can I become a Partner/Affiliate?
 A: https://track.marketingclicks101.com/signup/
 If you already have a registered account profile and want to become an approved Partner/Affiliate directly contact your personal account support manager.
@@ -198,6 +214,9 @@ Q: What types of Partnerships are available?
 A: https://www.nrdx.com/en/partners/
 NRDX partners with Affiliates who are approved to introduce their network of traders to a regulated investment firm like us. As a partner you will have a dedicated customer support team to help you grow your network and improve your monthly revenue.
 For more information read here.
+
+Q: What rewards do you offer?
+A: NRDX offers an attractive remuneration and competitive pricing structure based on a tailored partnership agreement. The remuneration is paid after a submission of the invoice. The trader network you introduce to NRDX remains yours.
 
 Q: Liquidity Distribution Services
 A: NRDX Prime is the institutional brand of NRDX Pty Ltd, focusing on the institutional services landscape.
@@ -240,6 +259,14 @@ Top Management highly involved in the partnership
 Time priority order execution
 Deliver an absolute online trading experience
 Integrated with multiple trading technologies via API feed
+
+Q: NRDX Prime technological edge and reliability?
+A: From our extensive list of well chosen liquidity providers, and our advanced aggregation technologies, we are able to achieve the best spread offering for each CFD instrument with high quality deep liquidity and stream US Stocks directly from the US Exchange.
+NRDX Prime utilizes its state of the art trading solutions to empower our clients’ operations with razor-sharp speed execution, near-zero latency and co-located connectivity with Equinix in three independent Data Centers in London, New York and Tokyo.
+Sheer Latency Order Execution on average 25 milliseconds
+Sophisticated performance trading technology
+Flexible account setup based on requirements
+Zero cost on implementation and maintenance
 
 Q: Can I trade without providing my documents?
 A: In order to start trading Live, you need to have your documents on record and upload them in our platform. So, it’s not possible to trade without documents.
@@ -311,6 +338,18 @@ The following documents are required for verification:
 •	One Proof of Residence document (i.e. Utility Bill, Bank Statement)
 •	A colored copy of your Identification Document (i.e. Passport or ID Card)
 
+Q: My documentation was rejected. Why?
+A: There are several reasons why your documentation required to open a Live account can be rejected. Please check some of the reasons why documents are rejected:
+•	Name of documentations not under your legal name.
+It is crucial to have the Proof of Residence (POR) and the Identity verification documents under your legal name, so if you apply with a documentation with a different name, it would be rejected.
+•	Text in the document can’t be read.
+When you submitted your documentation, it should be clearly visible and complete. Your documentation should not be partially damage, or poor quality.
+•	Expired documentation
+Your documents should have a validity time according to the requirements. For example, the POR (Proof of residence) should be issued in the last 6 months period. Your POI (Proof of Identity) should have a validity accordingly to the document issued/expiration date.
+•	Language not supported.
+If your documents are not in English, it should be translated into English. We do not accept documents in different languages.
+If you have any comments about your documentation, please ask your contact agent
+
 Q: Where can I access the NRDX Trader Portal?
 A: To find the access to the NRDX Trader Portal you need to access to www.NRDX.com
 
@@ -374,6 +413,6 @@ Q: How can I contact the support team?
 A: You can send us an email to: support@nrdx.com
 
 Q: In which languages can I received support from NRDX?
-A: We are a multicultural team and we can support you in the following languages: 
-	English, Arabic, Spanish, Portuguese, Hindi, Thai, Vietnamese, Japanese, Chinese, Malay
+A: We are a multicultural team and we can support you in the following languages:
+English, Arabic, Spanish, Portuguese, Hindi, Thai, Vietnamese, Japanese, Chinese, Malay
 
