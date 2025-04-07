@@ -286,6 +286,10 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
                 print("No Q&A match found for the query.")
                 return (False, "")
             else:
+                # Remove "A: " prefix if it exists
+                if result_text.startswith("A: "):
+                    result_text = result_text[3:].strip()
+
                 print("Q&A match found for the query.")
                 return (True, result_text)
         else:
