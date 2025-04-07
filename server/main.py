@@ -96,108 +96,64 @@ app.add_middleware(
 
 
 # --- Helper Functions --- (Keep as they are)
-def is_related_to_stocks_crypto(query: str) -> bool:
-    keywords = [
-        "stock",
-        "shares",
-        "equity",
-        "ticker",
-        "crypto",
-        "cryptocurrency",
-        "bitcoin",
-        "ethereum",
-        "coin",
-        "token",
-        "trading",
-        "invest",
-        "investment",
-        "buy",
-        "sell",
-        "hold",
-        "market",
-        "exchange",
-        "nasdaq",
-        "nyse",
-        "price",
-        "value",
-        "valuation",
-        "portfolio",
-        "asset",
-        "dividend",
-        "earnings",
-        "revenue",
-        "profit",
-        "loss",
-        "ipo",
-        "etf",
-        "mutual fund",
-        "bond",
-        "forex",
-        "commodity",
-        "gold",
-        "silver",
-        "analysis",
-        "forecast",
-        "trend",
-        "outlook",
-        "recommendation",
-        "company",
-        "companies",
-        "business",
-        "corporation",
-        "industry",
-        "sector",
-        "operations",
-        "tesla",
-        "tsla",
-        "apple",
-        "aapl",
-        "microsoft",
-        "msft",
-        "google",
-        "googl",
-        "alphabet",
-        "amazon",
-        "amzn",
-        "meta",
-        "facebook",
-        "nvidia",
-        "nvda",
-        "coinbase",
-        "coin",
-        "binance",
-        "netflix",
-        "nflx",
-        "ford",
-        "gm",
-        "boeing",
-        "hp",
-        "biotech",
-        "technology",
-        "energy",
-        "finance",
-        "healthcare",
-        "pharmaceutical",
-        "semiconductor",
-        "retail",
-        "automotive",
-        "trade",
-    ]
-    query_lower = query.lower()
-    if any(
-        re.search(r"\b" + re.escape(keyword) + r"\b", query_lower)
-        or keyword in query_lower
-        for keyword in keywords
-    ):
-        matched_keywords = [
-            k
-            for k in keywords
-            if re.search(r"\b" + re.escape(k) + r"\b", query_lower) or k in query_lower
+async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool:
+    """
+    Determines if the query is related to stocks, cryptocurrency, or trading using OpenAI.
+    Returns True if related, False otherwise.
+    """
+    if not client:
+        print("OpenAI client not available for stock/crypto classification.")
+        return False
+
+    print(f"Classifying if query is related to stocks/crypto: '{query}'")
+    try:
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """Analyze the user query. Is it related to stocks, cryptocurrency, trading, investing, or financial markets?
+                
+                Consider semantic similarity and not just exact matches. For example:
+                - Questions about technical indicators (RSI, MACD, etc.) are related
+                - Questions about market analysis, charts, or trading strategies are related
+                - Questions about financial instruments, brokers, or trading platforms are related
+                - Questions about economic indicators that affect markets are related
+                
+                If yes, respond with 'True'.
+                If no, respond with 'False'.
+                
+                Answer only with 'True' or 'False'.""",
+            },
+            {
+                "role": "user",
+                "content": f'User Query: "{query}"\n\nIs this query related to stocks, cryptocurrency, or trading (True/False):',
+            },
         ]
-        print(f"Query deemed related. Matched keywords: {matched_keywords}")
-        return True
-    print("Query NOT deemed related based on keywords.")
-    return False
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=classification_messages,
+            max_tokens=5,
+            temperature=0.0,
+        )
+
+        # Parse the response content
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip().lower()
+            print(f"Stock/crypto classification result: '{result_text}'")
+            return "true" in result_text
+        else:
+            print(
+                "Warning: Could not parse classification response. Defaulting to False."
+            )
+            return False
+
+    except Exception as e:
+        print(f"Error during stock/crypto classification: {e}")
+        return False
 
 
 def get_stock_price(ticker: str) -> float | str:
@@ -769,7 +725,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
         else:
             # If no Q&A match, check if the query is related to stocks/crypto
-            if not is_related_to_stocks_crypto(user_query):
+            if not await is_related_to_stocks_crypto(user_query, client):
                 print("Query not related. Returning restricted response.")
                 return {
                     "response": "I can only answer questions about stocks, cryptocurrency, or trading."
