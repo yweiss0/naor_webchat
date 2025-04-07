@@ -373,3 +373,7 @@ e)	Note: The new password would apply only to NRDX Trader Portal, your trading a
 Q: How can I contact the support team?
 A: You can send us an email to: support@nrdx.com
 
+Q: In which languages can I received support from NRDX?
+A: We are a multicultural team and we can support you in the following languages: 
+	English, Arabic, Spanish, Portuguese, Hindi, Thai, Vietnamese, Japanese, Chinese, Malay
+
