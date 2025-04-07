@@ -714,6 +714,9 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     raw_ai_response = None
     messages_sent_to_openai = []
 
+    # Define current_user_message_dict at the beginning to ensure it's always available
+    current_user_message_dict = {"role": "user", "content": user_query}
+
     try:
         # First check if the query matches a question in the Q&A file
         qa_match, qa_answer = await find_qa_match(user_query, client)
@@ -751,7 +754,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 base_messages = [
                     {"role": "system", "content": system_prompt}
                 ] + loaded_history
-                current_user_message_dict = {"role": "user", "content": user_query}
 
                 if search_needed:
                     print("DEBUG: Web search determined NEEDED.")
