@@ -156,19 +156,48 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         return False
 
 
-def get_stock_price(ticker: str) -> float | str:
+def get_stock_price(
+    ticker: str, include_history: bool = False
+) -> tuple[float | str, dict | None]:
+    """
+    Get the current price and optionally historical data for a ticker.
+    Returns a tuple of (current_price, historical_data).
+    """
     try:
         stock = yf.Ticker(ticker)
         price = stock.info.get("regularMarketPrice", stock.info.get("currentPrice"))
+
+        historical_data = None
+        if include_history:
+            # Get 5-day history for weekly context
+            hist = stock.history(period="5d")
+            if not hist.empty:
+                historical_data = {
+                    "dates": hist.index.strftime("%Y-%m-%d").tolist(),
+                    "open": hist["Open"].tolist(),
+                    "high": hist["High"].tolist(),
+                    "low": hist["Low"].tolist(),
+                    "close": hist["Close"].tolist(),
+                    "volume": (
+                        hist["Volume"].tolist() if "Volume" in hist.columns else None
+                    ),
+                }
+
         if price is not None:
-            return round(float(price), 2)
+            return round(float(price), 2), historical_data
+
+        # Fallback to historical data if current price not available
+        if historical_data:
+            return round(float(historical_data["close"][-1]), 2), historical_data
+
         hist = stock.history(period="1d")
         if not hist.empty:
-            return round(float(hist["Close"].iloc[-1]), 2)
-        return f"Could not retrieve price for {ticker}."
+            return round(float(hist["Close"].iloc[-1]), 2), None
+
+        return f"Could not retrieve price for {ticker}.", None
     except Exception as e:
         print(f"Error fetching price for {ticker}: {e}")
-        return f"Error retrieving price for {ticker}."
+        return f"Error retrieving price for {ticker}.", None
 
 
 def duckduckgo_search(query: str, max_results: int = 5) -> str:
@@ -353,14 +382,14 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
 # --- New Function: Check if query is about current stock price ---
 async def is_stock_price_query(
     user_query: str, client: OpenAI | None
-) -> tuple[bool, str]:
+) -> tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
-    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string)
+    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
     """
     if not client:
         print("OpenAI client not available for stock price query classification.")
-        return (False, "")
+        return (False, "", False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
     try:
@@ -368,8 +397,15 @@ async def is_stock_price_query(
             {
                 "role": "system",
                 "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock, cryptocurrency, market index, commodity, or forex pair? 
-                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL"}
-                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": ""}
+                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false}
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false}
+                
+                Also determine if the query needs additional market context (like recent price movements, trends, or explanations for price changes).
+                Set "needs_market_context" to true if the query asks about:
+                - Price changes or movements (e.g., "did the S&P 500 decline this week?")
+                - Reasons for price changes (e.g., "why did Bitcoin drop?")
+                - Trends or patterns (e.g., "is gold trending up?")
+                - Comparisons (e.g., "how does AAPL compare to MSFT?")
                 
                 Common ticker symbols:
                 - Market indices: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (NASDAQ), ^RUT (Russell 2000), ^VIX (VIX), ^FTSE (FTSE 100), ^GDAXI (DAX), ^N225 (Nikkei 225)
@@ -404,33 +440,42 @@ async def is_stock_price_query(
                 result_json = json.loads(result_text)
                 is_price_query = result_json.get("is_price_query", False)
                 ticker = result_json.get("ticker", "").strip().upper()
+                needs_market_context = result_json.get("needs_market_context", False)
 
                 print(
-                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}"
+                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
-                return (is_price_query, ticker)
+                return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
-                return (False, "")
+                return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
-            return (False, "")
+            return (False, "", False)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
-        return (False, "")
+        return (False, "", False)
 
 
 # --- Handle direct stock price queries ---
 async def handle_stock_price_query(
-    ticker: str, user_query: str, client: OpenAI | None
+    ticker: str,
+    user_query: str,
+    client: OpenAI | None,
+    needs_market_context: bool = False,
 ) -> str:
     """Handles direct stock price queries using Yahoo Finance."""
-    print(f"Handling direct stock price query for ticker: {ticker}")
+    print(
+        f"Handling direct stock price query for ticker: {ticker}, needs_market_context: {needs_market_context}"
+    )
 
-    price = get_stock_price(ticker)
+    # Get price and historical data if market context is needed
+    price, historical_data = get_stock_price(
+        ticker, include_history=needs_market_context
+    )
 
     # Determine the type of financial instrument
     instrument_type = "stock"
@@ -444,14 +489,29 @@ async def handle_stock_price_query(
         instrument_type = "cryptocurrency"
 
     # Create system prompt for formatting the response
-    system_prompt = f"You are a financial assistant specializing in stocks, cryptocurrency, and trading. Format the provided {instrument_type} price information into a clear, helpful response. Ensure prices are presented in USD."
+    system_prompt = f"""You are a financial assistant specializing in stocks, cryptocurrency, and trading. 
+    Format the provided {instrument_type} price information into a clear, helpful response. 
+    Ensure prices are presented in USD.
+    
+    If historical data is provided, analyze the price movements and trends to answer the user's question about price changes or reasons for those changes.
+    If the user is asking about recent declines or increases, compare the current price to previous prices in the historical data.
+    If the user is asking why prices changed, provide possible explanations based on the historical data and your knowledge of market factors."""
+
+    # Prepare the user message with price and historical data
+    user_message_content = f"Original query: {user_query}\n\nFinancial data: The latest price for {ticker} is: {price}"
+
+    if historical_data:
+        user_message_content += f"\n\nHistorical data (last 5 days):\n"
+        for i in range(len(historical_data["dates"])):
+            user_message_content += f"- {historical_data['dates'][i]}: Open: {historical_data['open'][i]}, High: {historical_data['high'][i]}, Low: {historical_data['low'][i]}, Close: {historical_data['close'][i]}\n"
+
+    # If market context is needed but we don't have historical data, suggest web search
+    if needs_market_context and not historical_data:
+        user_message_content += "\n\nNote: To provide a complete answer about price movements or reasons for changes, additional market context from web search would be helpful."
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": f"Original query: {user_query}\n\nFinancial data: The latest price for {ticker} is: {price}",
-        },
+        {"role": "user", "content": user_message_content},
     ]
 
     try:
@@ -814,12 +874,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 }
 
             # First check if this is a direct stock price query
-            is_price_query, ticker = await is_stock_price_query(user_query, client)
+            is_price_query, ticker, needs_market_context = await is_stock_price_query(
+                user_query, client
+            )
 
             if is_price_query and ticker:
                 print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
                 raw_ai_response = await handle_stock_price_query(
-                    ticker, user_query, client
+                    ticker, user_query, client, needs_market_context
                 )
                 final_response_content = process_text(raw_ai_response)
                 print(
