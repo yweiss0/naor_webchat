@@ -367,9 +367,18 @@ async def is_stock_price_query(
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock or cryptocurrency? 
+                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock, cryptocurrency, market index, commodity, or forex pair? 
                 If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL"}
-                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": ""}""",
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": ""}
+                
+                Common ticker symbols:
+                - Market indices: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (NASDAQ), ^RUT (Russell 2000), ^VIX (VIX), ^FTSE (FTSE 100), ^GDAXI (DAX), ^N225 (Nikkei 225)
+                - Commodities: GC=F (Gold), SI=F (Silver), CL=F (Crude Oil), NG=F (Natural Gas)
+                - Currencies: EURUSD=X (EUR/USD), GBPUSD=X (GBP/USD), USDJPY=X (USD/JPY)
+                - Treasury Yields: ^TNX (10-Year), ^FVX (5-Year), ^TYX (30-Year)
+                - Cryptocurrencies: BTC-USD, ETH-USD, etc.
+                
+                If the user mentions a market index, commodity, forex pair, or cryptocurrency by name, extract the appropriate ticker symbol.""",
             },
             {
                 "role": "user",
@@ -423,14 +432,25 @@ async def handle_stock_price_query(
 
     price = get_stock_price(ticker)
 
+    # Determine the type of financial instrument
+    instrument_type = "stock"
+    if ticker.startswith("^"):
+        instrument_type = "market index"
+    elif ticker.endswith("=F"):
+        instrument_type = "commodity"
+    elif ticker.endswith("=X"):
+        instrument_type = "forex pair"
+    elif ticker.endswith("-USD"):
+        instrument_type = "cryptocurrency"
+
     # Create system prompt for formatting the response
-    system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Format the provided stock price information into a clear, helpful response. Ensure prices are presented in USD."
+    system_prompt = f"You are a financial assistant specializing in stocks, cryptocurrency, and trading. Format the provided {instrument_type} price information into a clear, helpful response. Ensure prices are presented in USD."
 
     messages = [
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
-            "content": f"Original query: {user_query}\n\nStock data: The latest price for {ticker} is: {price}",
+            "content": f"Original query: {user_query}\n\nFinancial data: The latest price for {ticker} is: {price}",
         },
     ]
 
