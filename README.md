@@ -60,3 +60,94 @@ How to create a Svelte standalone app?
         <script src="http://localhost:8080/floating_button.min.js"></script>
     c. test the WordPress website.
 
+Option B - create a web component (more robust way - will make sure the styles kept no matter where you use it.)
+
+1. Create svelte app (NOT Sveltekit!) 
+    npm create vite my-web-component 
+
+    choose svelte from the list
+2.  cd my-web-component
+    npm install
+
+3. install tailwind (here we used tailwind V3, https://v3.tailwindcss.com/docs/guides/vite#svelte)
+    a. npm install -D tailwindcss@3 postcss autoprefixer
+    b. npx tailwindcss init -p
+    c. edit tailwind.config.js:
+        /** @type {import('tailwindcss').Config} */
+            export default {
+            content: [
+                "./index.html",
+                "./src/**/*.{svelte,js,ts,jsx,tsx}",
+            ],
+            theme: {
+                extend: {},
+            },
+            plugins: [],
+            }
+    d. edit app.css:
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+4. edit svelte.config.js
+    import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+
+    export default {
+    // Consult https://svelte.dev/docs#compile-time-svelte-preprocess
+    // for more information about preprocessors
+    preprocess: vitePreprocess(),
+    compilerOptions: {
+        customElement:true
+    }
+    };
+
+5. edit vite.config.js
+    import { defineConfig } from 'vite'
+    import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+    // https://vite.dev/config/
+    export default defineConfig({
+    build: {
+        lib: {
+        name: "svelteWebComponents",
+        entry: "src/main.js",
+        formats: ["iife"],
+        fileName: "swc"
+        },
+    },
+    plugins: [svelte()],
+    });
+
+6. now create your svelte file inside of /lib
+    e.g /lib/ChatWidget.svelte
+
+7. Important! in the top of you svelte file add this: 
+    <svelte:options customElement="swc-chatwidget" /> 
+    (the name must have a - in the middle and must be 2 words e.g swc-chatwidget)
+
+8. for tailwind to work add this in the svelte file:
+    <style>
+        @import 'tailwindcss/base';
+        @import 'tailwindcss/components';
+        @import 'tailwindcss/utilities';
+    <style>
+
+9. edit /src/main.js
+    import './app.css'
+    import ChatWidget from './lib/ChatWidget.svelte';
+
+10. build the app 
+    a. npm run build
+
+11. you will have now in the /dist folder 3 files, you need only the file swc.iife.js
+
+12. host this file anywehere you want.
+
+13. in every place you want to use the web component add the following tags in the html
+    
+    <script type="module" src="where_you_host_the_file/swc.iife.js"></script>
+    <swc-chatwidget></swc-chatwidget>
+
+    Note: the second tag will have the same value as the value you used in the svelte file: <svelte:options customElement="swc-chatwidget" /> 
+    
+
+
