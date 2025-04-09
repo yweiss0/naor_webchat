@@ -60,7 +60,7 @@ How to create a Svelte standalone app?
         <script src="http://localhost:8080/floating_button.min.js"></script>
     c. test the WordPress website.
 
-Option B - create a web component (more robust way - will make sure the styles kept no matter where you use it.)
+## Option B - create a web component (more robust way - will make sure the styles kept no matter where you use it.)
 
 1. Create svelte app (NOT Sveltekit!) 
     npm create vite my-web-component 
@@ -148,6 +148,6 @@ Option B - create a web component (more robust way - will make sure the styles k
     <swc-chatwidget></swc-chatwidget>
 
     Note: the second tag will have the same value as the value you used in the svelte file: <svelte:options customElement="swc-chatwidget" /> 
-    
+
 
 
