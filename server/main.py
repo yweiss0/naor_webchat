@@ -79,43 +79,20 @@ app = FastAPI(lifespan=lifespan)
 # --- CORS configuration (Specific origins for credentialed requests) ---
 origins = [
     "http://localhost:5173",  # Local dev frontend
-    "https://nextaisolutions.cloud",  # Testing FRONTEND
+    "https://nextaisolutions.cloud",  # My tetsing FRONTEND
     "https://trade.dev-worldcapital1.com",  # Naor allowed domain
     # Add other specific origins if necessary
 ]
 # Note: Avoid "*" with allow_credentials=True in production if possible
 
-
-# Create a safer implementation of the origin validator
-def allow_origin(origin):
-    # First check explicit origins
-    if origin in origins:
-        return True
-
-    # Then safely check for subdomains
-    try:
-        if origin and isinstance(origin, str):
-            # Check for subdomains of dev-worldcapital1.com
-            if origin.endswith("dev-worldcapital1.com") and origin.startswith(
-                "https://"
-            ):
-                return True
-    except Exception:
-        # If any error occurs during validation, default to False
-        pass
-
-    return False
-
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Setting this to * and using the validator function instead
+    allow_origins=origins,  # Use specific list
     allow_credentials=True,  # MUST be True for cookies
     allow_methods=["GET", "POST", "OPTIONS"],  # Be specific
     allow_headers=["*"],  # Or specify needed headers like Content-Type
     expose_headers=["Content-Length", "X-Request-ID"],
     max_age=600,
-    allow_origin_func=allow_origin,  # Using our custom function for validation
 )
 
 
