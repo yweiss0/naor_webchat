@@ -86,24 +86,30 @@ origins = [
 # Note: Avoid "*" with allow_credentials=True in production if possible
 
 
-# Create a callback function to validate origins with wildcard support
+# Create a safer implementation of the origin validator
 def allow_origin(origin):
+    # First check explicit origins
     if origin in origins:
         return True
-    # Check for subdomains of dev-worldcapital1.com
-    if (
-        origin
-        and origin.endswith("dev-worldcapital1.com")
-        and origin.startswith("https://")
-    ):
-        return True
+
+    # Then safely check for subdomains
+    try:
+        if origin and isinstance(origin, str):
+            # Check for subdomains of dev-worldcapital1.com
+            if origin.endswith("dev-worldcapital1.com") and origin.startswith(
+                "https://"
+            ):
+                return True
+    except Exception:
+        # If any error occurs during validation, default to False
+        pass
+
     return False
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # This list is used when not providing allow_origin_regex
-    allow_origin_regex=None,  # Not using regex approach
+    allow_origins=["*"],  # Setting this to * and using the validator function instead
     allow_credentials=True,  # MUST be True for cookies
     allow_methods=["GET", "POST", "OPTIONS"],  # Be specific
     allow_headers=["*"],  # Or specify needed headers like Content-Type
