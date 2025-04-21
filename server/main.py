@@ -14,20 +14,10 @@ import uuid
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 import traceback
-from langfuse import Langfuse
-from langfuse.model import CreateTrace, CreateSpan, CreateGeneration, CreateEvent
 
 # --- Configuration & Initialization ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
-LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
-LANGFUSE_HOST = os.getenv("LANGFUSE_HOST")
-
-# Initialize Langfuse
-langfuse = Langfuse(
-    secret_key=LANGFUSE_SECRET_KEY, public_key=LANGFUSE_PUBLIC_KEY, host=LANGFUSE_HOST
-)
 
 # --- Redis Configuration (Reads from .env) ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -116,8 +106,6 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         print("OpenAI client not available for stock/crypto classification.")
         return False
 
-    trace = langfuse.trace(name="stock_crypto_classification", input={"query": query})
-
     print(f"Classifying if query is related to stocks/crypto: '{query}'")
     try:
         classification_messages = [
@@ -142,13 +130,6 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
             },
         ]
 
-        generation = trace.generation(
-            name="classification_call",
-            model="gpt-4o-mini",
-            input=classification_messages,
-            metadata={"temperature": 0.0, "max_tokens": 5},
-        )
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
@@ -164,25 +145,15 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"Stock/crypto classification result: '{result_text}'")
-
-            generation.end(
-                output=result_text,
-                usage=response.usage.__dict__ if response.usage else None,
-            )
-            trace.update(output={"result": result_text})
-
             return "true" in result_text
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
-            generation.end(output="error", error="Could not parse response")
-            trace.update(output={"result": "error"})
             return False
 
     except Exception as e:
         print(f"Error during stock/crypto classification: {e}")
-        trace.update(error=str(e))
         return False
 
 
@@ -340,13 +311,10 @@ async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, s
         print("OpenAI client not available for Q&A matching.")
         return (False, "")
 
-    trace = langfuse.trace(name="qa_matching", input={"query": user_query})
-
     # Load the Q&A file
     qa_dict = load_qa_file()
     if not qa_dict:
         print("Q&A dictionary is empty, cannot find match.")
-        trace.update(output={"result": "empty_qa_dict"})
         return (False, "")
 
     print(f"Checking if query matches Q&A file: '{user_query}'")
@@ -377,13 +345,6 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
             },
         ]
 
-        generation = trace.generation(
-            name="qa_matching_call",
-            model="gpt-4o-mini",
-            input=classification_messages,
-            metadata={"temperature": 0.0},
-        )
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
@@ -400,11 +361,6 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
 
             if result_text == "NO_MATCH":
                 print("No Q&A match found for the query.")
-                generation.end(
-                    output="NO_MATCH",
-                    usage=response.usage.__dict__ if response.usage else None,
-                )
-                trace.update(output={"result": "no_match"})
                 return (False, "")
             else:
                 # Remove "A: " prefix if it exists
@@ -412,23 +368,15 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
                     result_text = result_text[3:].strip()
 
                 print("Q&A match found for the query.")
-                generation.end(
-                    output=result_text,
-                    usage=response.usage.__dict__ if response.usage else None,
-                )
-                trace.update(output={"result": "match", "answer": result_text})
                 return (True, result_text)
         else:
             print(
                 "Warning: Could not parse Q&A matching response. Defaulting to no match."
             )
-            generation.end(output="error", error="Could not parse response")
-            trace.update(output={"result": "error"})
             return (False, "")
 
     except Exception as e:
         print(f"Error during Q&A matching: {e}")
-        trace.update(error=str(e))
         return (False, "")
 
 
@@ -443,10 +391,6 @@ async def is_stock_price_query(
     if not client:
         print("OpenAI client not available for stock price query classification.")
         return (False, "", False)
-
-    trace = langfuse.trace(
-        name="stock_price_query_classification", input={"query": user_query}
-    )
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
     try:
@@ -479,13 +423,6 @@ async def is_stock_price_query(
             },
         ]
 
-        generation = trace.generation(
-            name="stock_price_classification_call",
-            model="gpt-4o-mini",
-            input=classification_messages,
-            metadata={"temperature": 0.0, "response_format": "json_object"},
-        )
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
@@ -509,30 +446,18 @@ async def is_stock_price_query(
                 print(
                     f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
-
-                generation.end(
-                    output=result_json,
-                    usage=response.usage.__dict__ if response.usage else None,
-                )
-                trace.update(output=result_json)
-
                 return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
-                generation.end(output="error", error="JSON decode error")
-                trace.update(output={"result": "json_error"})
                 return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
-            generation.end(output="error", error="Could not parse response")
-            trace.update(output={"result": "error"})
             return (False, "", False)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
-        trace.update(error=str(e))
         return (False, "", False)
 
 
@@ -644,10 +569,6 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
 
-    trace = langfuse.trace(
-        name="web_search_classification", input={"query": user_query}
-    )
-
     # Check for specific keywords that should always trigger web search
     web_search_keywords = [
         "today",
@@ -721,7 +642,6 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
     # Check if any of the web search keywords are in the query
     if any(keyword in query_lower for keyword in web_search_keywords):
         print(f"DEBUG: Query contains web search keyword, triggering web search.")
-        trace.update(output={"result": "keyword_match"})
         return True
 
     recall_keywords = [
@@ -737,12 +657,10 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         key in query_lower for key in recall_keywords
     ):
         print("DEBUG: Query classified as recall, skipping web search.")
-        trace.update(output={"result": "recall_match"})
         return False
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
-        trace.update(output={"result": "no_client"})
         return False
     try:
         classification_messages = [
@@ -768,12 +686,6 @@ Do NOT say True if the user is asking about the conversation history or what was
                 "content": f'User Query: "{user_query}"\n\nRequires Web Search (True/False):',
             },
         ]
-        generation = trace.generation(
-            name="web_search_classification_call",
-            model="gpt-4o-mini",
-            input=classification_messages,
-            metadata={"temperature": 0.0, "max_tokens": 5},
-        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
@@ -787,24 +699,14 @@ Do NOT say True if the user is asking about the conversation history or what was
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
-
-            generation.end(
-                output=result_text,
-                usage=response.usage.__dict__ if response.usage else None,
-            )
-            trace.update(output={"result": result_text})
-
             return "true" in result_text
         else:
             print(
                 "DEBUG: Could not parse classification response. Defaulting to False."
             )
-            generation.end(output="error", error="Could not parse response")
-            trace.update(output={"result": "error"})
             return False
     except Exception as e:
         print(f"DEBUG: Error during classification LLM call: {e}")
-        trace.update(error=str(e))
         return False
 
 
@@ -813,15 +715,8 @@ async def handle_tool_calls(
 ) -> str:
     if not client:
         return "Error: OpenAI client not available."
-
-    trace = langfuse.trace(
-        name="tool_calls_handling",
-        input={"query": user_query, "messages_history": messages_history},
-    )
-
     tool_calls = response_message.tool_calls
     if not tool_calls:
-        trace.update(output={"result": "no_tool_calls"})
         return response_message.content or "Error: No tool calls or content."
 
     print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
@@ -879,10 +774,6 @@ async def handle_tool_calls(
             }
         ] + messages_for_follow_up
 
-        generation = trace.generation(
-            name="follow_up_call", model="gpt-4o-mini", input=follow_up_messages
-        )
-
         follow_up_response = client.chat.completions.create(
             model="gpt-4o-mini", messages=follow_up_messages
         )
@@ -890,19 +781,9 @@ async def handle_tool_calls(
         print(
             f"DEBUG: Follow-up Response snippet: {final_content[:50] if final_content else 'None'}..."
         )
-
-        generation.end(
-            output=final_content,
-            usage=(
-                follow_up_response.usage.__dict__ if follow_up_response.usage else None
-            ),
-        )
-        trace.update(output={"result": final_content})
-
         return final_content or "Error: No content in follow-up."
     except Exception as e:
         print(f"DEBUG: Error during follow-up LLM call: {e}")
-        trace.update(error=str(e))
         return f"Error summarizing tool results."
 
 
@@ -923,10 +804,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     session_id = request.cookies.get("chatbotSessionId")
     loaded_history = []
     is_new_session = False
-
-    trace = langfuse.trace(
-        name="chat_endpoint", input={"query": user_query, "session_id": session_id}
-    )
 
     print(
         f"\n--- Request Start (Session: {session_id[-6:] if session_id else 'NEW'}) ---"
@@ -989,14 +866,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             raw_ai_response = qa_answer
             final_response_content = process_text(raw_ai_response)
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
-            trace.update(
-                output={"result": "qa_match", "answer": final_response_content}
-            )
         else:
             # If no Q&A match, check if the query is related to stocks/crypto
             if not await is_related_to_stocks_crypto(user_query, client):
                 print("Query not related. Returning restricted response.")
-                trace.update(output={"result": "not_related"})
                 return {
                     "response": "I can only answer questions about stocks, cryptocurrency, or trading."
                 }
@@ -1014,13 +887,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 final_response_content = process_text(raw_ai_response)
                 print(
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
-                )
-                trace.update(
-                    output={
-                        "result": "stock_price",
-                        "ticker": ticker,
-                        "response": final_response_content,
-                    }
                 )
             else:
                 # Continue with the original flow - check if web search is needed
@@ -1062,13 +928,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
                         )
 
-                generation = trace.generation(
-                    name="main_chat_call",
-                    model="gpt-4o-mini",
-                    input=messages_sent_to_openai,
-                    metadata={"tools": available_tools},
-                )
-
                 openai_response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=messages_sent_to_openai,
@@ -1092,43 +951,27 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     print("DEBUG: ERROR - No final content generated.")
                     final_response_content = "I encountered an issue."
                     raw_ai_response = None
-                    generation.end(output="error", error="No content generated")
-                    trace.update(output={"result": "error"})
                 else:
                     final_response_content = process_text(raw_ai_response)
                     print(
                         f"DEBUG: Returning formatted response: {final_response_content}"
-                    )
-                    generation.end(
-                        output=final_response_content,
-                        usage=(
-                            openai_response.usage.__dict__
-                            if openai_response.usage
-                            else None
-                        ),
-                    )
-                    trace.update(
-                        output={"result": "success", "response": final_response_content}
                     )
 
     # Error Handling
     except BadRequestError as bre:
         print(f"DEBUG: ERROR - OpenAI Bad Request: {bre}")
         raw_ai_response = None
-        trace.update(error=str(bre))
         raise HTTPException(
             status_code=400,
             detail=f"API Error: {bre.body.get('message', 'Bad Request')}",
         )
     except HTTPException as http_exc:
         raw_ai_response = None
-        trace.update(error=str(http_exc))
         raise http_exc
     except Exception as e:
         print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
         traceback.print_exc()
         raw_ai_response = None
-        trace.update(error=str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
@@ -1153,7 +996,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             print(f"DEBUG: History save successful for session {session_id[-6:]}.")
         except Exception as e:
             print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
-            trace.update(error=f"Redis SET failed: {e}")
 
     # --- Set Cookie ---
     if is_new_session and session_id and redis_conn:
@@ -1182,14 +1024,6 @@ async def health_check(request: Request):
     redis_status = "not_initialized"
     openai_status = "not_initialized"
 
-    trace = langfuse.trace(
-        name="health_check",
-        input={
-            "redis_conn_state": bool(redis_conn_state),
-            "openai_client_state": bool(openai_client_state),
-        },
-    )
-
     if redis_conn_state:
         try:
             await redis_conn_state.ping()
@@ -1197,7 +1031,6 @@ async def health_check(request: Request):
         except Exception as e:
             print(f"Health Check Redis Ping Error: {e}")
             redis_status = "error_connecting"
-            trace.update(error=f"Redis ping error: {e}")
     else:
         redis_status = "conn_object_none_in_state"
 
@@ -1209,9 +1042,6 @@ async def health_check(request: Request):
     print(
         f"Health Check: Redis Status = {redis_status}, OpenAI Status = {openai_status}"
     )
-
-    trace.update(output={"redis_status": redis_status, "openai_status": openai_status})
-
     return {
         "status": "OK_V2_cross_origin",
         "redis_status": redis_status,
