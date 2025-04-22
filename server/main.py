@@ -673,14 +673,14 @@ async def is_stock_price_query(
     client: OpenAI | None,
     langfuse_client: Langfuse | None = None,
     parent_span=None,
-) -> tuple[bool, str, bool]:
+) -> tuple[bool, str, bool, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
-    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
+    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context, is_historical_query)
     """
     if not client:
         print("OpenAI client not available for stock price query classification.")
-        return (False, "", False)
+        return (False, "", False, False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
 
@@ -692,13 +692,55 @@ async def is_stock_price_query(
             input={"query": user_query},
         )
 
+    # Check for historical price query indicators
+    is_historical_query = any(
+        keyword in user_query.lower()
+        for keyword in [
+            "year ago",
+            "years ago",
+            "last year",
+            "previous year",
+            "month ago",
+            "months ago",
+            "last month",
+            "week ago",
+            "weeks ago",
+            "last week",
+            "yesterday",
+            "history",
+            "historical",
+            "past",
+            "before",
+            "at that time",
+            "back then",
+            "previously",
+        ]
+    )
+
+    # Also check for date patterns
+    date_patterns = [
+        r"\b(on|at)\s+(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # on 05/01/2023
+        r"\b(on|at)\s+(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # on 05-01-2023
+        r"\b(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # 05/01/2023
+        r"\b(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # 05-01-2023
+        r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # January 1st, 2023
+        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # Jan 1st, 2023
+    ]
+
+    for pattern in date_patterns:
+        if re.search(pattern, user_query.lower()):
+            is_historical_query = True
+            break
+
     try:
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock, cryptocurrency, market index, commodity, or forex pair? 
-                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false}
-                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false}
+                "content": """Analyze the user query. Is it specifically asking about a stock, cryptocurrency, market index, commodity, or forex pair price? 
+                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false, "is_historical_query": false}
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false, "is_historical_query": false}
+                
+                Set "is_historical_query" to true if the query is asking about a past price (e.g., "what was the price a year ago", "historical price", "price on January 1st", etc.).
                 
                 Also determine if the query needs additional market context (like recent price movements, trends, or explanations for price changes).
                 Set "needs_market_context" to true if the query asks about:
@@ -742,9 +784,15 @@ async def is_stock_price_query(
                 is_price_query = result_json.get("is_price_query", False)
                 ticker = result_json.get("ticker", "").strip().upper()
                 needs_market_context = result_json.get("needs_market_context", False)
+                model_detected_historical = result_json.get(
+                    "is_historical_query", False
+                )
+
+                # Combine the rule-based and model-based historical detection
+                is_historical_query = is_historical_query or model_detected_historical
 
                 print(
-                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
+                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}, is_historical_query={is_historical_query}"
                 )
 
                 if langfuse_client and span:
@@ -753,10 +801,16 @@ async def is_stock_price_query(
                             "is_price_query": is_price_query,
                             "ticker": ticker,
                             "needs_market_context": needs_market_context,
+                            "is_historical_query": is_historical_query,
                         }
                     )
 
-                return (is_price_query, ticker, needs_market_context)
+                return (
+                    is_price_query,
+                    ticker,
+                    needs_market_context,
+                    is_historical_query,
+                )
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
 
@@ -768,7 +822,7 @@ async def is_stock_price_query(
                         status="error",
                     )
 
-                return (False, "", False)
+                return (False, "", False, is_historical_query)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
@@ -780,7 +834,7 @@ async def is_stock_price_query(
                     status="error",
                 )
 
-            return (False, "", False)
+            return (False, "", False, is_historical_query)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
@@ -788,7 +842,7 @@ async def is_stock_price_query(
         if langfuse_client and span:
             span.end(output={"error": str(e)}, status="error")
 
-        return (False, "", False)
+        return (False, "", False, is_historical_query)
 
 
 # --- Handle direct stock price queries ---
@@ -1565,8 +1619,8 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 is_related_span.end(output={"is_related": True})
 
             # First check if this is a direct stock price query
-            is_price_query, ticker, needs_market_context = await is_stock_price_query(
-                user_query, client, langfuse_client, trace
+            is_price_query, ticker, needs_market_context, is_historical_query = (
+                await is_stock_price_query(user_query, client, langfuse_client, trace)
             )
 
             if is_price_query and ticker:
@@ -1597,6 +1651,20 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 search_needed, is_historical_date_query, date_string = (
                     await needs_web_search(user_query, client, langfuse_client, trace)
                 )
+
+                # If we identified a historical date in web search function, set the historical flag
+                if is_historical_date_query and not is_historical_query:
+                    is_historical_query = True
+                    print(
+                        "DEBUG: Setting historical query flag based on detected date pattern"
+                    )
+
+                # If we have a historical price query but web search wasn't triggered,
+                # force it to be true since we definitely need web search for historical data
+                if is_historical_query and not search_needed:
+                    print("DEBUG: Forcing web search for historical price query")
+                    search_needed = True
+
                 system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
                 base_messages = [
@@ -1617,16 +1685,27 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 historical_query_with_ticker = False
 
                 # If we have a historical date but no ticker yet, try to extract ticker from the query
-                if is_historical_date_query and not (is_price_query and ticker):
+                if (is_historical_date_query or is_historical_query) and not (
+                    is_price_query and ticker
+                ):
                     print(
-                        f"DEBUG: Historical date detected ({date_string}) but no ticker identified yet, trying to extract from query"
+                        f"DEBUG: Historical query detected but no ticker identified yet, trying to extract from query"
                     )
 
                     # Check for potential ticker
                     ticker_extraction_messages = [
                         {
                             "role": "system",
-                            "content": """Extract stock ticker symbols from the query if they exist. If a company name is mentioned but no ticker, return the correct ticker. Only respond with a JSON object like: {"ticker": "AAPL"} or {"ticker": ""} if no ticker is found.""",
+                            "content": """Extract stock ticker symbols from the query if they exist. If a company name is mentioned but no ticker, return the correct ticker. 
+                            
+Examples:
+- "What was Tesla's price a year ago?" -> {"ticker": "TSLA"}
+- "How much did AAPL cost last month?" -> {"ticker": "AAPL"}
+- "What was Microsoft trading at 6 months ago?" -> {"ticker": "MSFT"}
+- "Bitcoin price history" -> {"ticker": "BTC-USD"}
+- "S&P 500 last year" -> {"ticker": "^GSPC"}
+
+Only respond with a JSON object like: {"ticker": "AAPL"} or {"ticker": ""} if no ticker is found.""",
                         },
                         {
                             "role": "user",
@@ -1658,7 +1737,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         print(f"DEBUG: Error extracting ticker from query: {e}")
 
                 if (
-                    is_historical_date_query
+                    (is_historical_date_query or is_historical_query)
                     and ticker
                     and (is_price_query or historical_query_with_ticker)
                 ):
@@ -1673,8 +1752,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         )
 
                     # Get the historical price data
+                    date_to_query = (
+                        date_string if date_string else "1 year ago"
+                    )  # Default to 1 year ago if no specific date
                     price_result, historical_data = get_stock_price(
-                        ticker, False, date_string
+                        ticker, False, date_to_query
                     )
 
                     if historical_price_span:
@@ -1685,12 +1767,44 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             }
                         )
 
-                    # Also get web search data for context
+                    # Always get web search data for historical queries
                     search_span = None
                     if trace:
                         search_span = trace.span(name="historical_web_search")
 
-                    search_query = f"{ticker} stock price {date_string} historical data"
+                    # Form a more complete search query
+                    if date_string:
+                        search_query = (
+                            f"{ticker} stock price {date_string} historical data"
+                        )
+                    else:
+                        # If we don't have a specific date string but know it's historical, search appropriately
+                        if (
+                            "year ago" in user_query.lower()
+                            or "last year" in user_query.lower()
+                        ):
+                            search_query = (
+                                f"{ticker} stock price 1 year ago historical data"
+                            )
+                        elif (
+                            "month ago" in user_query.lower()
+                            or "last month" in user_query.lower()
+                        ):
+                            search_query = (
+                                f"{ticker} stock price 1 month ago historical data"
+                            )
+                        elif (
+                            "week ago" in user_query.lower()
+                            or "last week" in user_query.lower()
+                        ):
+                            search_query = (
+                                f"{ticker} stock price 1 week ago historical data"
+                            )
+                        else:
+                            search_query = (
+                                f"{ticker} stock price historical data past performance"
+                            )
+
                     search_result_text = duckduckgo_search(
                         search_query, max_results=5, include_date=True
                     )
@@ -1703,8 +1817,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             }
                         )
 
-                    # Format the response
-                    historical_prompt = f"""Based on the user's query about {ticker}'s historical stock price on {date_string}, please provide a comprehensive answer using the following data:
+                    # Format the response with explicit instructions for historical context
+                    date_desc = (
+                        date_string if date_string else "the requested historical date"
+                    )
+                    historical_prompt = f"""Based on the user's query about {ticker}'s historical stock price, please provide a comprehensive answer using the following data:
 
 Historical Price Data:
 {price_result}
@@ -1712,7 +1829,14 @@ Historical Price Data:
 Additional Context from Web Search:
 {search_result_text}
 
-Provide a clear answer that includes the historical price, how it compares to the current price if available, and any relevant context from the web search. If appropriate, mention the percentage change from then to now. Format currency values in USD with a dollar sign.
+Provide a clear answer that includes:
+1. The historical price with the specific date it represents
+2. How it compares to the current price if available
+3. The percentage change from then to now
+4. Any relevant market context from the web search about why the price changed
+5. Format all currency values in USD with a dollar sign
+
+Make sure to address the user's original query: "{user_query}"
 """
 
                     messages_sent_to_openai = base_messages + [
@@ -1726,7 +1850,11 @@ Provide a clear answer that includes the historical price, how it compares to th
                             name="historical_price_query",
                             output={
                                 "ticker": ticker,
-                                "date": date_string,
+                                "date": (
+                                    date_string
+                                    if date_string
+                                    else "unspecified historical date"
+                                ),
                                 "price_result": price_result,
                             },
                         )
