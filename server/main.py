@@ -1846,6 +1846,9 @@ Make sure to address the user's original query: "{user_query}"
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
 
+                # Set messages_sent_to_openai to empty list since we already have the response
+                messages_sent_to_openai = []
+
                 if trace:
                     trace.event(
                         name="stock_price_response",
