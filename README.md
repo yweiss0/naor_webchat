@@ -2,12 +2,12 @@
 
 Svelte standalone web app for stock chatbot (use **Option B**).
 
-This app is built with [Svelte Standalone](https://standalone.brenoliradev.com/).
+
 
 ---
 
-## How to Create a Svelte Standalone App (Option B)
-
+## How to Create a Svelte Standalone App (Option A)
+This optin uses  [Svelte Standalone](https://standalone.brenoliradev.com/).
 1. **Create a Svelte App**  
    ```bash
    npx sv create my-app   # you can add Tailwind
