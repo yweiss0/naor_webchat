@@ -14,10 +14,17 @@ import uuid
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 import traceback
+from langfuse import Langfuse
+from langfuse.openai import openai as langfuse_openai
 
 # --- Configuration & Initialization ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# --- Langfuse Configuration (Reads from .env) ---
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
 # --- Redis Configuration (Reads from .env) ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -46,6 +53,7 @@ class QueryRequest(BaseModel):
 async def lifespan(app: FastAPI):
     app.state.redis_conn = None
     app.state.openai_client = None
+    app.state.langfuse = None
     print("Lifespan: Initializing resources...")
     try:
         redis_connection = redis.Redis.from_url(
@@ -66,11 +74,29 @@ async def lifespan(app: FastAPI):
             app.state.openai_client = None
     else:
         print("Lifespan Warning: OPENAI_API_KEY not found.")
+
+    if LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY:
+        try:
+            app.state.langfuse = Langfuse(
+                secret_key=LANGFUSE_SECRET_KEY,
+                public_key=LANGFUSE_PUBLIC_KEY,
+                host=LANGFUSE_HOST,
+            )
+            print("Lifespan: Langfuse client created.")
+        except Exception as e:
+            print(f"Lifespan Startup Error: Could not initialize Langfuse client: {e}")
+            app.state.langfuse = None
+    else:
+        print("Lifespan Warning: LANGFUSE_SECRET_KEY or LANGFUSE_PUBLIC_KEY not found.")
+
     yield
     print("Lifespan: Shutting down resources...")
     if hasattr(app.state, "redis_conn") and app.state.redis_conn:
         await app.state.redis_conn.close()
         print("Lifespan: Redis connection closed.")
+    if hasattr(app.state, "langfuse") and app.state.langfuse:
+        app.state.langfuse.flush()
+        print("Lifespan: Langfuse resources flushed.")
     print("Lifespan: Shutdown complete.")
 
 
@@ -97,7 +123,12 @@ app.add_middleware(
 
 
 # --- Helper Functions --- (Keep as they are)
-async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool:
+async def is_related_to_stocks_crypto(
+    query: str,
+    client: OpenAI | None,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
+) -> bool:
     """
     Determines if the query is related to stocks, cryptocurrency, or trading using OpenAI.
     Returns True if related, False otherwise.
@@ -107,6 +138,15 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         return False
 
     print(f"Classifying if query is related to stocks/crypto: '{query}'")
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="classify_stocks_crypto",
+            input={"query": query},
+        )
+
     try:
         classification_messages = [
             {
@@ -130,12 +170,33 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
             },
         ]
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=classification_messages,
-            max_tokens=5,
-            temperature=0.0,
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="stock_crypto_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            # Use regular OpenAI client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
 
         # Parse the response content
         if (
@@ -145,15 +206,36 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"Stock/crypto classification result: '{result_text}'")
-            return "true" in result_text
+            is_related = "true" in result_text
+
+            # Update the span with the result if available
+            if langfuse_client and span:
+                span.end(output={"is_related": is_related, "result_text": result_text})
+
+            return is_related
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+
+            # Update the span with the failure if available
+            if langfuse_client and span:
+                span.end(
+                    output={
+                        "error": "Could not parse classification response",
+                        "is_related": False,
+                    }
+                )
+
             return False
 
     except Exception as e:
         print(f"Error during stock/crypto classification: {e}")
+
+        # Update the span with the error if available
+        if langfuse_client and span:
+            span.end(output={"error": str(e), "is_related": False}, status="error")
+
         return False
 
 
@@ -302,7 +384,12 @@ def load_qa_file() -> dict:
         return {}
 
 
-async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, str]:
+async def find_qa_match(
+    user_query: str,
+    client: OpenAI | None,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
+) -> tuple[bool, str]:
     """
     Check if the user query matches a question in the Q&A file.
     Returns a tuple of (is_match, answer_or_empty_string)
@@ -311,10 +398,23 @@ async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, s
         print("OpenAI client not available for Q&A matching.")
         return (False, "")
 
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="find_qa_match",
+            input={"query": user_query},
+        )
+
     # Load the Q&A file
     qa_dict = load_qa_file()
     if not qa_dict:
         print("Q&A dictionary is empty, cannot find match.")
+        if langfuse_client and span:
+            span.end(
+                output={"error": "Q&A dictionary is empty", "is_match": False},
+                status="error",
+            )
         return (False, "")
 
     print(f"Checking if query matches Q&A file: '{user_query}'")
@@ -345,11 +445,31 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
             },
         ]
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=classification_messages,
-            temperature=0.0,
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="qa_match_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            # Use regular OpenAI client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                temperature=0.0,
+            )
 
         # Parse the response content
         if (
@@ -361,6 +481,8 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
 
             if result_text == "NO_MATCH":
                 print("No Q&A match found for the query.")
+                if langfuse_client and span:
+                    span.end(output={"is_match": False})
                 return (False, "")
             else:
                 # Remove "A: " prefix if it exists
@@ -368,21 +490,35 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
                     result_text = result_text[3:].strip()
 
                 print("Q&A match found for the query.")
+                if langfuse_client and span:
+                    span.end(output={"is_match": True, "answer": result_text})
                 return (True, result_text)
         else:
             print(
                 "Warning: Could not parse Q&A matching response. Defaulting to no match."
             )
+            if langfuse_client and span:
+                span.end(
+                    output={
+                        "error": "Could not parse Q&A matching response",
+                        "is_match": False,
+                    }
+                )
             return (False, "")
 
     except Exception as e:
         print(f"Error during Q&A matching: {e}")
+        if langfuse_client and span:
+            span.end(output={"error": str(e), "is_match": False}, status="error")
         return (False, "")
 
 
 # --- New Function: Check if query is about current stock price ---
 async def is_stock_price_query(
-    user_query: str, client: OpenAI | None
+    user_query: str,
+    client: OpenAI | None,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
 ) -> tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
@@ -393,6 +529,15 @@ async def is_stock_price_query(
         return (False, "", False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="is_stock_price_query",
+            input={"query": user_query},
+        )
+
     try:
         classification_messages = [
             {
@@ -423,12 +568,33 @@ async def is_stock_price_query(
             },
         ]
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=classification_messages,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="stock_price_query_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            # Use regular OpenAI client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
 
         # Parse the response content
         if (
@@ -446,18 +612,48 @@ async def is_stock_price_query(
                 print(
                     f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
+
+                if langfuse_client and span:
+                    span.end(
+                        output={
+                            "is_price_query": is_price_query,
+                            "ticker": ticker,
+                            "needs_market_context": needs_market_context,
+                        }
+                    )
+
                 return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
+
+                if langfuse_client and span:
+                    span.end(
+                        output={
+                            "error": f"Could not parse JSON response: {result_text}"
+                        },
+                        status="error",
+                    )
+
                 return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+
+            if langfuse_client and span:
+                span.end(
+                    output={"error": "Could not parse classification response"},
+                    status="error",
+                )
+
             return (False, "", False)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
+
+        if langfuse_client and span:
+            span.end(output={"error": str(e)}, status="error")
+
         return (False, "", False)
 
 
@@ -467,16 +663,36 @@ async def handle_stock_price_query(
     user_query: str,
     client: OpenAI | None,
     needs_market_context: bool = False,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
 ) -> str:
     """Handles direct stock price queries using Yahoo Finance."""
     print(
         f"Handling direct stock price query for ticker: {ticker}, needs_market_context: {needs_market_context}"
     )
 
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="handle_stock_price_query",
+            input={
+                "ticker": ticker,
+                "query": user_query,
+                "needs_market_context": needs_market_context,
+            },
+        )
+
     # Get price and historical data if market context is needed
     price, historical_data = get_stock_price(
         ticker, include_history=needs_market_context
     )
+
+    if span:
+        span.event(
+            name="stock_price_data",
+            output={"price": price, "has_historical_data": historical_data is not None},
+        )
 
     # Determine the type of financial instrument
     instrument_type = "stock"
@@ -516,15 +732,48 @@ async def handle_stock_price_query(
     ]
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="format_stock_price_response",
+                model="gpt-4o-mini",
+                input=messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            # Use regular OpenAI client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+            )
 
         final_content = response.choices[0].message.content
+
+        if langfuse_client and span:
+            span.end(output={"response": final_content})
+
         return final_content
     except Exception as e:
         print(f"Error formatting stock price response: {e}")
+
+        if langfuse_client and span:
+            span.end(
+                output={
+                    "error": str(e),
+                    "fallback_response": f"The latest price for {ticker} is: {price}",
+                },
+                status="error",
+            )
+
         return f"The latest price for {ticker} is: {price}"
 
 
@@ -565,9 +814,22 @@ available_tools = [stock_price_function, web_search_function]
 # --- Core Logic ---
 
 
-async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
+async def needs_web_search(
+    user_query: str,
+    client: OpenAI | None,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
+) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="needs_web_search",
+            input={"query": user_query},
+        )
 
     # Check for specific keywords that should always trigger web search
     web_search_keywords = [
@@ -627,21 +889,13 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         "what's the condition",
         "what's the state",
         "what's the status",
-        "what's the situation",
-        "what's the outlook",
-        "what's the forecast",
-        "what's the prediction",
-        "what's the trend",
-        "what's the sentiment",
-        "what's the mood",
-        "what's the condition",
-        "what's the state",
-        "what's the status",
     ]
 
     # Check if any of the web search keywords are in the query
     if any(keyword in query_lower for keyword in web_search_keywords):
         print(f"DEBUG: Query contains web search keyword, triggering web search.")
+        if langfuse_client and span:
+            span.end(output={"needs_web_search": True, "reason": "keyword_match"})
         return True
 
     recall_keywords = [
@@ -657,10 +911,17 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         key in query_lower for key in recall_keywords
     ):
         print("DEBUG: Query classified as recall, skipping web search.")
+        if langfuse_client and span:
+            span.end(output={"needs_web_search": False, "reason": "recall_query"})
         return False
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
+        if langfuse_client and span:
+            span.end(
+                output={"needs_web_search": False, "reason": "no_openai_client"},
+                status="error",
+            )
         return False
     try:
         classification_messages = [
@@ -686,12 +947,34 @@ Do NOT say True if the user is asking about the conversation history or what was
                 "content": f'User Query: "{user_query}"\n\nRequires Web Search (True/False):',
             },
         ]
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=classification_messages,
-            max_tokens=5,
-            temperature=0.0,
-        )
+
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="web_search_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
         if (
             response.choices
             and response.choices[0].message
@@ -699,19 +982,49 @@ Do NOT say True if the user is asking about the conversation history or what was
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
-            return "true" in result_text
+            needs_search = "true" in result_text
+
+            if langfuse_client and span:
+                span.end(
+                    output={
+                        "needs_web_search": needs_search,
+                        "reason": "llm_classification",
+                        "result_text": result_text,
+                    }
+                )
+
+            return needs_search
         else:
             print(
                 "DEBUG: Could not parse classification response. Defaulting to False."
             )
+
+            if langfuse_client and span:
+                span.end(
+                    output={"needs_web_search": False, "reason": "parse_error"},
+                    status="error",
+                )
+
             return False
     except Exception as e:
         print(f"DEBUG: Error during classification LLM call: {e}")
+
+        if langfuse_client and span:
+            span.end(
+                output={"needs_web_search": False, "reason": "error", "error": str(e)},
+                status="error",
+            )
+
         return False
 
 
 async def handle_tool_calls(
-    response_message, user_query: str, messages_history: list, client: OpenAI | None
+    response_message,
+    user_query: str,
+    messages_history: list,
+    client: OpenAI | None,
+    langfuse_client: Langfuse | None = None,
+    parent_span=None,
 ) -> str:
     if not client:
         return "Error: OpenAI client not available."
@@ -722,11 +1035,37 @@ async def handle_tool_calls(
     print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
     messages_for_follow_up = messages_history + [response_message]
 
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="handle_tool_calls",
+            input={
+                "query": user_query,
+                "tool_calls": [
+                    {
+                        "function": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    }
+                    for tool_call in tool_calls
+                ],
+            },
+        )
+
     for tool_call in tool_calls:
         function_name = tool_call.function.name
         function_args_str = tool_call.function.arguments
         tool_call_id = tool_call.id
         result_content = ""
+
+        # Create a span for this specific tool call if Langfuse is available
+        tool_span = None
+        if langfuse_client and span:
+            tool_span = span.span(
+                name=f"tool_call_{function_name}",
+                input={"function": function_name, "arguments": function_args_str},
+            )
+
         try:
             args_dict = json.loads(function_args_str)
             if function_name == "get_stock_price":
@@ -737,8 +1076,19 @@ async def handle_tool_calls(
                     if ticker
                     else "Error: Ticker missing."
                 )
+
+                if langfuse_client and tool_span:
+                    tool_span.end(
+                        output={
+                            "ticker": ticker,
+                            "price": price,
+                            "result": result_content,
+                        }
+                    )
+
             elif function_name == "web_search":
                 search_query_arg = args_dict.get("query")
+                search_start_time = datetime.now()
                 result_content = (
                     duckduckgo_search(
                         f"{search_query_arg} in USD on {datetime.now():%B %d, %Y}"
@@ -746,14 +1096,37 @@ async def handle_tool_calls(
                     if search_query_arg
                     else "Error: Search query missing."
                 )
+
+                if langfuse_client and tool_span:
+                    tool_span.end(
+                        output={
+                            "query": search_query_arg,
+                            "result_length": len(result_content),
+                            "search_time_ms": (
+                                datetime.now() - search_start_time
+                            ).total_seconds()
+                            * 1000,
+                        }
+                    )
+
             else:
                 result_content = f"Error: Unknown function '{function_name}'."
+
+                if langfuse_client and tool_span:
+                    tool_span.end(
+                        output={"error": f"Unknown function '{function_name}'"},
+                        status="error",
+                    )
+
             print(
                 f"DEBUG: Tool '{function_name}' executed. Result snippet: {result_content[:50]}..."
             )
         except Exception as e:
             print(f"DEBUG: Error executing tool {function_name}: {e}")
             result_content = f"Error executing tool: {e}"
+
+            if langfuse_client and tool_span:
+                tool_span.end(output={"error": str(e)}, status="error")
 
         messages_for_follow_up.append(
             {
@@ -774,16 +1147,46 @@ async def handle_tool_calls(
             }
         ] + messages_for_follow_up
 
-        follow_up_response = client.chat.completions.create(
-            model="gpt-4o-mini", messages=follow_up_messages
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            follow_up_response = client.chat.completions.create(
+                model="gpt-4o-mini", messages=follow_up_messages
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="follow_up_response",
+                model="gpt-4o-mini",
+                input=follow_up_messages,
+                output=(
+                    follow_up_response.choices[0].message
+                    if follow_up_response.choices
+                    else None
+                ),
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            follow_up_response = client.chat.completions.create(
+                model="gpt-4o-mini", messages=follow_up_messages
+            )
+
         final_content = follow_up_response.choices[0].message.content
+
+        if langfuse_client and span:
+            span.end(output={"final_content": final_content})
+
         print(
             f"DEBUG: Follow-up Response snippet: {final_content[:50] if final_content else 'None'}..."
         )
         return final_content or "Error: No content in follow-up."
     except Exception as e:
         print(f"DEBUG: Error during follow-up LLM call: {e}")
+
+        if langfuse_client and span:
+            span.end(output={"error": str(e)}, status="error")
+
         return f"Error summarizing tool results."
 
 
@@ -792,6 +1195,7 @@ async def handle_tool_calls(
 async def chat(query: QueryRequest, request: Request, response: Response):
     redis_conn = request.app.state.redis_conn
     client = request.app.state.openai_client
+    langfuse_client = request.app.state.langfuse
 
     if not client:
         raise HTTPException(
@@ -805,6 +1209,23 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     loaded_history = []
     is_new_session = False
 
+    # Start a Langfuse trace for the entire request
+    trace = None
+    if langfuse_client:
+        client_ip = request.client.host if request.client else "unknown"
+        trace = langfuse_client.trace(
+            name="chat_request",
+            user_id=session_id if session_id else "new_user",
+            session_id=session_id if session_id else "new_session",
+            metadata={
+                "ip": client_ip,
+                "query": user_query,
+                "new_session": session_id is None,
+            },
+            input={"message": user_query},
+        )
+        print(f"DEBUG: Langfuse trace created with ID: {trace.id}")
+
     print(
         f"\n--- Request Start (Session: {session_id[-6:] if session_id else 'NEW'}) ---"
     )
@@ -813,6 +1234,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     # Load History
     if redis_conn and session_id:
+        history_span = None
+        if trace:
+            history_span = trace.span(name="load_history")
+
         print(f"DEBUG: Attempting to load history for session {session_id[-6:]}...")
         try:
             history_json = await redis_conn.get(session_id)
@@ -824,23 +1249,53 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     )
                     loaded_history = []
                     session_id = None
+
+                    if history_span:
+                        history_span.end(
+                            output={"error": "Corrupt history type", "status": "reset"},
+                            status="error",
+                        )
                 else:
                     print(f"DEBUG: Successfully loaded {len(loaded_history)} messages.")
                     if loaded_history:
                         print(f"DEBUG: Last loaded msg: {loaded_history[-1]}")
                     await redis_conn.expire(session_id, SESSION_TTL_SECONDS)
+
+                    if history_span:
+                        history_span.end(output={"messages_count": len(loaded_history)})
             else:
                 print(f"DEBUG: Session ID {session_id[-6:]} not found in Redis.")
                 session_id = None
+
+                if history_span:
+                    history_span.end(
+                        output={"error": "Session not found", "status": "reset"},
+                        status="error",
+                    )
         except json.JSONDecodeError as json_err:
             print(
                 f"DEBUG: ERROR - JSON Decode failed for session {session_id}: {json_err}. Resetting."
             )
             session_id = None
+
+            if history_span:
+                history_span.end(
+                    output={
+                        "error": f"JSON Decode error: {str(json_err)}",
+                        "status": "reset",
+                    },
+                    status="error",
+                )
         except Exception as e:
             print(
                 f"DEBUG: ERROR - Redis GET/EXPIRE failed: {e}. Proceeding without history."
             )
+
+            if history_span:
+                history_span.end(
+                    output={"error": f"Redis error: {str(e)}", "status": "continue"},
+                    status="error",
+                )
 
     # Create New Session ID
     if redis_conn and not session_id:
@@ -848,6 +1303,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         session_id = str(uuid.uuid4())
         print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
         loaded_history = []
+
+        # Update trace with new session ID if we created one
+        if trace:
+            trace.update(
+                user_id=session_id,
+                session_id=session_id,
+                metadata={"new_session_created": True},
+            )
 
     # Core Logic
     final_response_content = ""
@@ -859,49 +1322,109 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     try:
         # First check if the query matches a question in the Q&A file
-        qa_match, qa_answer = await find_qa_match(user_query, client)
+        qa_match, qa_answer = await find_qa_match(
+            user_query, client, langfuse_client, trace
+        )
 
         if qa_match:
             print(f"DEBUG: Q&A match found, using predefined answer.")
             raw_ai_response = qa_answer
             final_response_content = process_text(raw_ai_response)
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
+
+            if trace:
+                trace.event(
+                    name="qa_match_response", output={"answer": final_response_content}
+                )
         else:
             # If no Q&A match, check if the query is related to stocks/crypto
-            if not await is_related_to_stocks_crypto(user_query, client):
+            is_related_span = None
+            if trace:
+                is_related_span = trace.span(name="check_stocks_crypto_relevance")
+
+            if not await is_related_to_stocks_crypto(
+                user_query, client, langfuse_client, trace
+            ):
                 print("Query not related. Returning restricted response.")
+
+                if is_related_span:
+                    is_related_span.end(output={"is_related": False})
+
+                if trace:
+                    trace.update(
+                        output={
+                            "response": "I can only answer questions about stocks, cryptocurrency, or trading."
+                        },
+                        status="restricted",
+                    )
+
                 return {
                     "response": "I can only answer questions about stocks, cryptocurrency, or trading."
                 }
 
+            if is_related_span:
+                is_related_span.end(output={"is_related": True})
+
             # First check if this is a direct stock price query
             is_price_query, ticker, needs_market_context = await is_stock_price_query(
-                user_query, client
+                user_query, client, langfuse_client, trace
             )
 
             if is_price_query and ticker:
                 print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
                 raw_ai_response = await handle_stock_price_query(
-                    ticker, user_query, client, needs_market_context
+                    ticker,
+                    user_query,
+                    client,
+                    needs_market_context,
+                    langfuse_client,
+                    trace,
                 )
                 final_response_content = process_text(raw_ai_response)
                 print(
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
+
+                if trace:
+                    trace.event(
+                        name="stock_price_response",
+                        output={
+                            "ticker": ticker,
+                            "market_context_needed": needs_market_context,
+                        },
+                    )
             else:
                 # Continue with the original flow - check if web search is needed
-                search_needed = await needs_web_search(user_query, client)
+                search_needed = await needs_web_search(
+                    user_query, client, langfuse_client, trace
+                )
                 system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
                 base_messages = [
                     {"role": "system", "content": system_prompt}
                 ] + loaded_history
 
+                llm_call_span = None
+                if trace:
+                    llm_call_span = trace.span(
+                        name="main_llm_call", input={"search_needed": search_needed}
+                    )
+
                 if search_needed:
                     print("DEBUG: Web search determined NEEDED.")
+                    search_span = None
+                    if trace:
+                        search_span = trace.span(name="web_search")
+
                     search_result_text = duckduckgo_search(
                         f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
                     )
+
+                    if search_span:
+                        search_span.end(
+                            output={"results_length": len(search_result_text)}
+                        )
+
                     contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
                     contextual_user_message_dict = {
                         "role": "user",
@@ -911,6 +1434,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         contextual_user_message_dict
                     ]
                     print("DEBUG: Making LLM call with History + Search Results...")
+
+                    if trace:
+                        trace.event(
+                            name="web_search_used", output={"search_query": user_query}
+                        )
                 else:
                     print("DEBUG: Web search determined NOT needed.")
                     messages_sent_to_openai = base_messages + [
@@ -928,6 +1456,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
                         )
 
+                generation_start_time = datetime.now()
                 openai_response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=messages_sent_to_openai,
@@ -935,22 +1464,58 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     tool_choice="auto",
                 )
 
+                if llm_call_span and trace:
+                    llm_call_span.generation(
+                        name="openai_completion",
+                        model="gpt-4o-mini",
+                        input=messages_sent_to_openai,
+                        output=(
+                            openai_response.choices[0].message
+                            if openai_response.choices
+                            else None
+                        ),
+                        start_time=generation_start_time,
+                        end_time=datetime.now(),
+                    )
+
                 response_message = openai_response.choices[0].message
                 if response_message.tool_calls:
                     print(f"DEBUG: Tool call(s) requested...")
+                    tool_call_span = None
+                    if trace:
+                        tool_call_span = trace.span(name="tool_calls_handling")
+
                     raw_ai_response = await handle_tool_calls(
-                        response_message, user_query, messages_sent_to_openai, client
+                        response_message,
+                        user_query,
+                        messages_sent_to_openai,
+                        client,
+                        langfuse_client,
+                        tool_call_span,
                     )
+
+                    if tool_call_span:
+                        tool_call_span.end()
+
                 else:
                     raw_ai_response = response_message.content
                     print(
                         f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
                     )
 
+                if llm_call_span:
+                    llm_call_span.end()
+
                 if not raw_ai_response:
                     print("DEBUG: ERROR - No final content generated.")
                     final_response_content = "I encountered an issue."
                     raw_ai_response = None
+
+                    if trace:
+                        trace.update(
+                            status="error",
+                            error={"message": "No final content generated"},
+                        )
                 else:
                     final_response_content = process_text(raw_ai_response)
                     print(
@@ -961,22 +1526,49 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     except BadRequestError as bre:
         print(f"DEBUG: ERROR - OpenAI Bad Request: {bre}")
         raw_ai_response = None
+
+        if trace:
+            trace.update(
+                status="error",
+                error={
+                    "message": f"API Error: {bre.body.get('message', 'Bad Request')}"
+                },
+            )
+
         raise HTTPException(
             status_code=400,
             detail=f"API Error: {bre.body.get('message', 'Bad Request')}",
         )
     except HTTPException as http_exc:
         raw_ai_response = None
+
+        if trace:
+            trace.update(
+                status="error",
+                error={"message": http_exc.detail, "status_code": http_exc.status_code},
+            )
+
         raise http_exc
     except Exception as e:
         print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
         traceback.print_exc()
         raw_ai_response = None
+
+        if trace:
+            trace.update(
+                status="error",
+                error={"message": "Internal server error", "details": str(e)},
+            )
+
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
     if redis_conn and session_id and raw_ai_response:
         try:
+            history_save_span = None
+            if trace:
+                history_save_span = trace.span(name="save_history")
+
             new_history_entry = [
                 current_user_message_dict,
                 {"role": "assistant", "content": raw_ai_response},
@@ -994,8 +1586,16 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
             print(f"DEBUG: History save successful for session {session_id[-6:]}.")
+
+            if history_save_span:
+                history_save_span.end(output={"messages_saved": len(updated_history)})
         except Exception as e:
             print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
+
+            if trace:
+                error_event = trace.event(
+                    name="history_save_error", output={"error": str(e)}
+                )
 
     # --- Set Cookie ---
     if is_new_session and session_id and redis_conn:
@@ -1011,6 +1611,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             path="/",
             secure=True,  # MUST be True when SameSite=None
         )
+
+        if trace:
+            cookie_event = trace.event(
+                name="session_cookie_set", output={"session_id": session_id}
+            )
+
+    if trace:
+        trace.update(output={"response": final_response_content}, status="success")
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
     return {"response": final_response_content}
