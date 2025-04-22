@@ -710,7 +710,9 @@ def extract_date_from_query(query: str) -> str:
     """
     Extracts a date from the query if present.
     Handles various formats including:
-    - Natural language: "April 22 2024"
+    - Natural language: "April 22 2024", "April 22nd, 2024"
+    - Month abbreviations: "Apr 16, 2025", "apr 16 25"
+    - Day first: "16 April 2025", "16 april 25"
     - Relative dates: "yesterday", "last week", etc.
     - DD.MM.YYYY: "01.05.2024", "1.5.2024"
     - DD/MM/YYYY: "01/05/2024", "1/5/2024"
@@ -763,39 +765,65 @@ def extract_date_from_query(query: str) -> str:
         )  # Assume 20xx for years < 50
         return f"{int(day):02d}.{int(month):02d}.{full_year}"
 
-    # Month Day Year format (e.g. "April 22 2024" or "April 22nd, 2024")
-    months = [
-        "january",
-        "february",
-        "march",
-        "april",
-        "may",
-        "june",
-        "july",
-        "august",
-        "september",
-        "october",
-        "november",
-        "december",
-    ]
-    for month in months:
-        if month in query_lower:
-            # Look for month name followed by day and year
-            # Also account for ordinal suffixes like 1st, 2nd, 3rd, 4th
-            pattern = (
-                rf"\b{month}\s+(\d{{1,2}})(st|nd|rd|th)?\s*,?\s*(\d{{4}}|\d{{2}})\b"
-            )
-            match = re.search(pattern, query_lower)
-            if match:
-                day = match.group(1)
-                year = match.group(3)
-                month_num = months.index(month) + 1
+    # Full month names and month abbreviations
+    months = {
+        "january": 1,
+        "jan": 1,
+        "february": 2,
+        "feb": 2,
+        "march": 3,
+        "mar": 3,
+        "april": 4,
+        "apr": 4,
+        "may": 5,
+        "may": 5,
+        "june": 6,
+        "jun": 6,
+        "july": 7,
+        "jul": 7,
+        "august": 8,
+        "aug": 8,
+        "september": 9,
+        "sep": 9,
+        "sept": 9,
+        "october": 10,
+        "oct": 10,
+        "november": 11,
+        "nov": 11,
+        "december": 12,
+        "dec": 12,
+    }
 
-                # Handle 2-digit years
-                if len(year) == 2:
-                    year = f"20{year}" if int(year) < 50 else f"19{year}"
+    # Format: "Month DD, YYYY" or "Month DD YYYY" or "Month DD YY" (e.g., "April 16, 2025" or "apr 16 25")
+    for month_name, month_num in months.items():
+        # Check for "Month DD, YYYY" or "Month DD YYYY" or "Month DD YY"
+        pattern = (
+            rf"\b{month_name}\s+(\d{{1,2}})(st|nd|rd|th)?\s*,?\s*(\d{{4}}|\d{{2}})\b"
+        )
+        match = re.search(pattern, query_lower)
+        if match:
+            day = match.group(1)
+            year = match.group(3)
 
-                return f"{int(day):02d}.{month_num:02d}.{year}"
+            # Handle 2-digit years
+            if len(year) == 2:
+                year = f"20{year}" if int(year) < 50 else f"19{year}"
+
+            return f"{int(day):02d}.{month_num:02d}.{year}"
+
+    # Format: "DD Month YYYY" or "DD Month YY" (e.g., "16 April 2025" or "16 april 25")
+    for month_name, month_num in months.items():
+        pattern = rf"\b(\d{{1,2}})(st|nd|rd|th)?\s+{month_name}\s+(\d{{4}}|\d{{2}})\b"
+        match = re.search(pattern, query_lower)
+        if match:
+            day = match.group(1)
+            year = match.group(3)
+
+            # Handle 2-digit years
+            if len(year) == 2:
+                year = f"20{year}" if int(year) < 50 else f"19{year}"
+
+            return f"{int(day):02d}.{month_num:02d}.{year}"
 
     return ""
 
