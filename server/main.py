@@ -240,148 +240,14 @@ async def is_related_to_stocks_crypto(
 
 
 def get_stock_price(
-    ticker: str, include_history: bool = False, historical_date: str = None
+    ticker: str, include_history: bool = False
 ) -> tuple[float | str, dict | None]:
     """
     Get the current price and optionally historical data for a ticker.
-    If historical_date is provided, returns the price for that specific date.
     Returns a tuple of (current_price, historical_data).
     """
     try:
         stock = yf.Ticker(ticker)
-
-        # Handle historical date request
-        if historical_date:
-            print(f"Getting historical price for {ticker} on date: {historical_date}")
-            try:
-                # Try to parse the historical date
-                parsed_date = None
-
-                # Try different date formats
-                date_formats = [
-                    "%d/%m/%Y",
-                    "%m/%d/%Y",
-                    "%d-%m-%Y",
-                    "%m-%d-%Y",
-                    "%d.%m.%Y",
-                    "%m.%d.%Y",
-                    "%Y-%m-%d",
-                    "%B %d, %Y",
-                    "%b %d, %Y",
-                    "%d %B %Y",
-                    "%d %b %Y",
-                ]
-
-                # Clean up the date string
-                clean_date = historical_date.strip()
-                # Remove any "on", "at", etc. prefixes
-                prefixes = ["on", "at", "date", "for", "from"]
-                for prefix in prefixes:
-                    if clean_date.lower().startswith(prefix + " "):
-                        clean_date = clean_date[len(prefix) + 1 :].strip()
-
-                # Try each format
-                for date_format in date_formats:
-                    try:
-                        parsed_date = datetime.strptime(clean_date, date_format).date()
-                        break
-                    except ValueError:
-                        continue
-
-                # Handle special cases like "X years ago", "last year", etc.
-                if not parsed_date:
-                    today = datetime.now().date()
-                    if re.search(r"(\d+)\s+years?\s+ago", clean_date):
-                        years = int(
-                            re.search(r"(\d+)\s+years?\s+ago", clean_date).group(1)
-                        )
-                        parsed_date = today.replace(year=today.year - years)
-                    elif "last year" in clean_date or "previous year" in clean_date:
-                        parsed_date = today.replace(year=today.year - 1)
-                    elif "yesterday" in clean_date:
-                        parsed_date = today - timedelta(days=1)
-                    elif "last month" in clean_date:
-                        if today.month == 1:
-                            parsed_date = today.replace(year=today.year - 1, month=12)
-                        else:
-                            parsed_date = today.replace(month=today.month - 1)
-                    elif "last week" in clean_date:
-                        parsed_date = today - timedelta(days=7)
-
-                if parsed_date:
-                    # Format as YYYY-MM-DD for yfinance
-                    date_str = parsed_date.strftime("%Y-%m-%d")
-
-                    # Get data for a 5-day window around the requested date to handle weekends/holidays
-                    start_date = (parsed_date - timedelta(days=5)).strftime("%Y-%m-%d")
-                    end_date = (parsed_date + timedelta(days=5)).strftime("%Y-%m-%d")
-
-                    hist = stock.history(start=start_date, end=end_date)
-
-                    if hist.empty:
-                        return (
-                            f"No historical data available for {ticker} around {historical_date}.",
-                            None,
-                        )
-
-                    # Find the closest available date
-                    closest_date = None
-                    min_diff = float("inf")
-                    target_date = parsed_date
-
-                    for date_idx in hist.index:
-                        date_diff = abs((date_idx.date() - target_date).days)
-                        if date_diff < min_diff:
-                            min_diff = date_diff
-                            closest_date = date_idx
-
-                    if closest_date:
-                        price = float(hist.loc[closest_date, "Close"])
-                        actual_date = closest_date.strftime("%Y-%m-%d")
-
-                        # Also get current price for comparison
-                        current_price_info = stock.info.get(
-                            "regularMarketPrice", stock.info.get("currentPrice")
-                        )
-                        current_price = (
-                            round(float(current_price_info), 2)
-                            if current_price_info
-                            else None
-                        )
-
-                        # Create historical_data dictionary with both specific date and current
-                        historical_data = {
-                            "requested_date": parsed_date.strftime("%Y-%m-%d"),
-                            "actual_date": actual_date,
-                            "price": round(price, 2),
-                            "current_price": current_price,
-                            "price_change": (
-                                round(((current_price / price) - 1) * 100, 2)
-                                if current_price
-                                else None
-                            ),
-                        }
-
-                        return (
-                            f"Historical price for {ticker} on {actual_date} (closest to requested {parsed_date.strftime('%Y-%m-%d')}): ${round(price, 2)}",
-                            historical_data,
-                        )
-
-                return (
-                    f"Could not parse the date '{historical_date}' for {ticker}.",
-                    None,
-                )
-
-            except Exception as e:
-                print(
-                    f"Error getting historical price for {ticker} on {historical_date}: {e}"
-                )
-                return (
-                    f"Error retrieving historical price for {ticker} on {historical_date}: {str(e)}",
-                    None,
-                )
-
-        # Standard current price logic (no historical date)
         price = stock.info.get("regularMarketPrice", stock.info.get("currentPrice"))
 
         historical_data = None
@@ -417,13 +283,7 @@ def get_stock_price(
         return f"Error retrieving price for {ticker}.", None
 
 
-def duckduckgo_search(
-    query: str, max_results: int = 5, include_date: bool = False
-) -> str:
-    """
-    Perform a web search using DuckDuckGo.
-    If include_date is True, it will explicitly include date information in the search.
-    """
+def duckduckgo_search(query: str, max_results: int = 5) -> str:
     print(f"DDG Search: '{query}'")
     time_period_used = "unknown"
     try:
@@ -462,20 +322,6 @@ def duckduckgo_search(
                         )
                     ]
                     time_period_used = "last year"
-
-                    # For historical queries, we might need to go even further back
-                    if len(results) < 2 and include_date:
-                        print(
-                            "Not enough results from the last year, trying all time for historical data..."
-                        )
-                        results = [
-                            r
-                            for r in ddgs.text(
-                                query,
-                                max_results=max_results,
-                            )
-                        ]
-                        time_period_used = "all time"
 
             if not results:
                 return "No relevant information found."
@@ -673,14 +519,14 @@ async def is_stock_price_query(
     client: OpenAI | None,
     langfuse_client: Langfuse | None = None,
     parent_span=None,
-) -> tuple[bool, str, bool, bool]:
+) -> tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
-    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context, is_historical_query)
+    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
     """
     if not client:
         print("OpenAI client not available for stock price query classification.")
-        return (False, "", False, False)
+        return (False, "", False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
 
@@ -692,55 +538,13 @@ async def is_stock_price_query(
             input={"query": user_query},
         )
 
-    # Check for historical price query indicators
-    is_historical_query = any(
-        keyword in user_query.lower()
-        for keyword in [
-            "year ago",
-            "years ago",
-            "last year",
-            "previous year",
-            "month ago",
-            "months ago",
-            "last month",
-            "week ago",
-            "weeks ago",
-            "last week",
-            "yesterday",
-            "history",
-            "historical",
-            "past",
-            "before",
-            "at that time",
-            "back then",
-            "previously",
-        ]
-    )
-
-    # Also check for date patterns
-    date_patterns = [
-        r"\b(on|at)\s+(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # on 05/01/2023
-        r"\b(on|at)\s+(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # on 05-01-2023
-        r"\b(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # 05/01/2023
-        r"\b(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # 05-01-2023
-        r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # January 1st, 2023
-        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # Jan 1st, 2023
-    ]
-
-    for pattern in date_patterns:
-        if re.search(pattern, user_query.lower()):
-            is_historical_query = True
-            break
-
     try:
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Is it specifically asking about a stock, cryptocurrency, market index, commodity, or forex pair price? 
-                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false, "is_historical_query": false}
-                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false, "is_historical_query": false}
-                
-                Set "is_historical_query" to true if the query is asking about a past price (e.g., "what was the price a year ago", "historical price", "price on January 1st", etc.).
+                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock, cryptocurrency, market index, commodity, or forex pair? 
+                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false}
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false}
                 
                 Also determine if the query needs additional market context (like recent price movements, trends, or explanations for price changes).
                 Set "needs_market_context" to true if the query asks about:
@@ -784,15 +588,9 @@ async def is_stock_price_query(
                 is_price_query = result_json.get("is_price_query", False)
                 ticker = result_json.get("ticker", "").strip().upper()
                 needs_market_context = result_json.get("needs_market_context", False)
-                model_detected_historical = result_json.get(
-                    "is_historical_query", False
-                )
-
-                # Combine the rule-based and model-based historical detection
-                is_historical_query = is_historical_query or model_detected_historical
 
                 print(
-                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}, is_historical_query={is_historical_query}"
+                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
 
                 if langfuse_client and span:
@@ -801,16 +599,10 @@ async def is_stock_price_query(
                             "is_price_query": is_price_query,
                             "ticker": ticker,
                             "needs_market_context": needs_market_context,
-                            "is_historical_query": is_historical_query,
                         }
                     )
 
-                return (
-                    is_price_query,
-                    ticker,
-                    needs_market_context,
-                    is_historical_query,
-                )
+                return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
 
@@ -822,7 +614,7 @@ async def is_stock_price_query(
                         status="error",
                     )
 
-                return (False, "", False, is_historical_query)
+                return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
@@ -834,7 +626,7 @@ async def is_stock_price_query(
                     status="error",
                 )
 
-            return (False, "", False, is_historical_query)
+            return (False, "", False)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
@@ -842,7 +634,7 @@ async def is_stock_price_query(
         if langfuse_client and span:
             span.end(output={"error": str(e)}, status="error")
 
-        return (False, "", False, is_historical_query)
+        return (False, "", False)
 
 
 # --- Handle direct stock price queries ---
@@ -989,11 +781,7 @@ async def needs_web_search(
     client: OpenAI | None,
     langfuse_client: Langfuse | None = None,
     parent_span=None,
-) -> tuple[bool, bool, str]:
-    """
-    Determines if the query requires web search and/or historical date data.
-    Returns a tuple of (needs_web_search, is_historical_date_query, date_string)
-    """
+) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
 
@@ -1004,52 +792,6 @@ async def needs_web_search(
             name="needs_web_search",
             input={"query": user_query},
         )
-
-    # Check for specific date patterns in the query (e.g., "on May 1st", "in 2023", "last year", etc.)
-    date_patterns = [
-        r"\b(on|at)\s+(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # on 05/01/2023
-        r"\b(on|at)\s+(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # on 05-01-2023
-        r"\b(\d{1,2})[./](\d{1,2})[./](\d{2,4})",  # 05/01/2023
-        r"\b(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})",  # 05-01-2023
-        r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # January 1st, 2023
-        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(st|nd|rd|th)?,?\s+(\d{4})",  # Jan 1st, 2023
-        r"\b(\d{1,2})(st|nd|rd|th)?\s+(of\s+)?(january|february|march|april|may|june|july|august|september|october|november|december),?\s+(\d{4})",  # 1st of January, 2023
-        r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\s+ago",  # one year ago
-        r"\b(\d+)\s+years?\s+ago",  # 5 years ago
-        r"\b(last|previous)\s+year",  # last year
-        r"\byesterday\b",  # yesterday
-        r"\blast\s+(week|month|quarter)\b",  # last week, month, quarter
-    ]
-
-    is_historical_date_query = False
-    date_string = ""
-
-    # Check if the query contains specific date patterns
-    for pattern in date_patterns:
-        if re.search(pattern, query_lower):
-            is_historical_date_query = True
-            date_match = re.search(pattern, user_query)
-            if date_match:
-                date_string = date_match.group(0)
-            break
-
-    # If it's a historical date query with price/stock mentions, it definitely needs web search
-    if is_historical_date_query and (
-        "price" in query_lower or "stock" in query_lower or "share" in query_lower
-    ):
-        print(
-            f"DEBUG: Historical date query detected with date '{date_string}', triggering web search."
-        )
-        if langfuse_client and span:
-            span.end(
-                output={
-                    "needs_web_search": True,
-                    "is_historical_date_query": True,
-                    "date": date_string,
-                    "reason": "historical_date_query",
-                }
-            )
-        return (True, True, date_string)
 
     # Check for specific keywords that should always trigger web search
     web_search_keywords = [
@@ -1109,33 +851,14 @@ async def needs_web_search(
         "what's the condition",
         "what's the state",
         "what's the status",
-        "history",
-        "historical",
-        "past",
-        "ago",
-        "previously",
-        "earlier",
-        "before",
-        "prior",
-        "back in",
-        "year ago",
-        "month ago",
-        "week ago",
     ]
 
     # Check if any of the web search keywords are in the query
     if any(keyword in query_lower for keyword in web_search_keywords):
         print(f"DEBUG: Query contains web search keyword, triggering web search.")
         if langfuse_client and span:
-            span.end(
-                output={
-                    "needs_web_search": True,
-                    "is_historical_date_query": is_historical_date_query,
-                    "date": date_string,
-                    "reason": "keyword_match",
-                }
-            )
-        return (True, is_historical_date_query, date_string)
+            span.end(output={"needs_web_search": True, "reason": "keyword_match"})
+        return True
 
     recall_keywords = [
         "remember",
@@ -1151,39 +874,22 @@ async def needs_web_search(
     ):
         print("DEBUG: Query classified as recall, skipping web search.")
         if langfuse_client and span:
-            span.end(
-                output={
-                    "needs_web_search": False,
-                    "is_historical_date_query": False,
-                    "date": "",
-                    "reason": "recall_query",
-                }
-            )
-        return (False, False, "")
+            span.end(output={"needs_web_search": False, "reason": "recall_query"})
+        return False
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
         if langfuse_client and span:
             span.end(
-                output={
-                    "needs_web_search": False,
-                    "is_historical_date_query": False,
-                    "date": "",
-                    "reason": "no_openai_client",
-                },
+                output={"needs_web_search": False, "reason": "no_openai_client"},
                 status="error",
             )
-        return (False, False, "")
+        return False
     try:
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Does it require searching the web for:
-1. Current events (e.g., today's news)
-2. Real-time data (like specific current stock prices not covered by tools)
-3. Very recent information published today or within the last few days
-4. Historical price information for a specific date or time period
-5. Comparative pricing information across different points in time
+                "content": """Analyze the user query. Does it require searching the web for current events (e.g., today's news), real-time data (like specific current stock prices not covered by tools), or very recent information published today or within the last few days? 
 
 IMPORTANT: If the user is asking about:
 - Whether today is a good day for trading
@@ -1193,11 +899,8 @@ IMPORTANT: If the user is asking about:
 - What's happening in the market today
 - Market outlook or forecasts
 - Recent market events or news
-- Historical stock prices for a specific date
-- Stock prices from a year ago or any specific time in the past
-- Stock price comparisons between different dates
 
-Then you MUST respond with 'True' as these questions require current or historical information.
+Then you MUST respond with 'True' as these questions require current information.
 
 Do NOT say True if the user is asking about the conversation history or what was said before. Answer only with 'True' or 'False'.""",
             },
@@ -1207,13 +910,32 @@ Do NOT say True if the user is asking about the conversation history or what was
             },
         ]
 
-        # Use regular OpenAI client without specific tracing
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=classification_messages,
-            max_tokens=5,
-            temperature=0.0,
-        )
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="web_search_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
 
         if (
             response.choices
@@ -1228,14 +950,12 @@ Do NOT say True if the user is asking about the conversation history or what was
                 span.end(
                     output={
                         "needs_web_search": needs_search,
-                        "is_historical_date_query": is_historical_date_query,
-                        "date": date_string,
                         "reason": "llm_classification",
                         "result_text": result_text,
                     }
                 )
 
-            return (needs_search, is_historical_date_query, date_string)
+            return needs_search
         else:
             print(
                 "DEBUG: Could not parse classification response. Defaulting to False."
@@ -1243,32 +963,21 @@ Do NOT say True if the user is asking about the conversation history or what was
 
             if langfuse_client and span:
                 span.end(
-                    output={
-                        "needs_web_search": False,
-                        "is_historical_date_query": False,
-                        "date": "",
-                        "reason": "parse_error",
-                    },
+                    output={"needs_web_search": False, "reason": "parse_error"},
                     status="error",
                 )
 
-            return (False, False, "")
+            return False
     except Exception as e:
         print(f"DEBUG: Error during classification LLM call: {e}")
 
         if langfuse_client and span:
             span.end(
-                output={
-                    "needs_web_search": False,
-                    "is_historical_date_query": False,
-                    "date": "",
-                    "reason": "error",
-                    "error": str(e),
-                },
+                output={"needs_web_search": False, "reason": "error", "error": str(e)},
                 status="error",
             )
 
-        return (False, False, "")
+        return False
 
 
 async def handle_tool_calls(
@@ -1619,219 +1328,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 is_related_span.end(output={"is_related": True})
 
             # First check if this is a direct stock price query
-            is_price_query, ticker, needs_market_context, is_historical_query = (
-                await is_stock_price_query(user_query, client, langfuse_client, trace)
+            is_price_query, ticker, needs_market_context = await is_stock_price_query(
+                user_query, client, langfuse_client, trace
             )
 
-            # Check if we're dealing with a historical date query first
-            search_needed, is_historical_date_query, date_string = (
-                await needs_web_search(user_query, client, langfuse_client, trace)
-            )
-
-            # If we identified a historical date in web search function, set the historical flag
-            if is_historical_date_query and not is_historical_query:
-                is_historical_query = True
-                print(
-                    "DEBUG: Setting historical query flag based on detected date pattern"
-                )
-
-            # If we have a historical price query but web search wasn't triggered,
-            # force it to be true since we definitely need web search for historical data
-            if is_historical_query and not search_needed:
-                print("DEBUG: Forcing web search for historical price query")
-                search_needed = True
-
-            # Define system prompt and base messages
-            system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
-
-            base_messages = [
-                {"role": "system", "content": system_prompt}
-            ] + loaded_history
-
-            llm_call_span = None
-            if trace:
-                llm_call_span = trace.span(
-                    name="main_llm_call",
-                    input={
-                        "search_needed": search_needed,
-                        "is_historical_date_query": is_historical_date_query,
-                    },
-                )
-
-            # Process historical queries with priority - even if it was detected as a direct price query
-            if is_historical_query or is_historical_date_query:
-                print(
-                    f"DEBUG: Detected historical query, handling via specialized historical price path"
-                )
-
-                # If we have a historical date but no ticker yet, try to extract ticker from the query
-                if not ticker:
-                    print(
-                        f"DEBUG: Historical query detected but no ticker identified yet, trying to extract from query"
-                    )
-
-                    # Check for potential ticker
-                    ticker_extraction_messages = [
-                        {
-                            "role": "system",
-                            "content": """Extract stock ticker symbols from the query if they exist. If a company name is mentioned but no ticker, return the correct ticker. 
-                            
-Examples:
-- "What was Tesla's price a year ago?" -> {"ticker": "TSLA"}
-- "How much did AAPL cost last month?" -> {"ticker": "AAPL"}
-- "What was Microsoft trading at 6 months ago?" -> {"ticker": "MSFT"}
-- "Bitcoin price history" -> {"ticker": "BTC-USD"}
-- "S&P 500 last year" -> {"ticker": "^GSPC"}
-
-Only respond with a JSON object like: {"ticker": "AAPL"} or {"ticker": ""} if no ticker is found.""",
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Extract ticker from this query: '{user_query}'",
-                        },
-                    ]
-
-                    ticker_response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=ticker_extraction_messages,
-                        temperature=0.0,
-                        response_format={"type": "json_object"},
-                    )
-
-                    try:
-                        result_json = json.loads(
-                            ticker_response.choices[0].message.content.strip()
-                        )
-                        extracted_ticker = result_json.get("ticker", "").strip().upper()
-
-                        if extracted_ticker:
-                            ticker = extracted_ticker
-                            is_price_query = True
-                            print(
-                                f"DEBUG: Extracted ticker {ticker} from historical query"
-                            )
-                    except Exception as e:
-                        print(f"DEBUG: Error extracting ticker from query: {e}")
-
-                if ticker:
-                    print(
-                        f"DEBUG: Historical price query detected for ticker {ticker} on date {date_string if date_string else 'unspecified historical date'}"
-                    )
-
-                    historical_price_span = None
-                    if trace:
-                        historical_price_span = trace.span(
-                            name="historical_price_query"
-                        )
-
-                    # Get the historical price data
-                    date_to_query = (
-                        date_string if date_string else "1 year ago"
-                    )  # Default to 1 year ago if no specific date
-                    price_result, historical_data = get_stock_price(
-                        ticker, False, date_to_query
-                    )
-
-                    if historical_price_span:
-                        historical_price_span.end(
-                            output={
-                                "result": price_result,
-                                "has_data": historical_data is not None,
-                            }
-                        )
-
-                    # Always get web search data for historical queries
-                    search_span = None
-                    if trace:
-                        search_span = trace.span(name="historical_web_search")
-
-                    # Form a more complete search query
-                    if date_string:
-                        search_query = (
-                            f"{ticker} stock price {date_string} historical data"
-                        )
-                    else:
-                        # If we don't have a specific date string but know it's historical, search appropriately
-                        if (
-                            "year ago" in user_query.lower()
-                            or "last year" in user_query.lower()
-                        ):
-                            search_query = (
-                                f"{ticker} stock price 1 year ago historical data"
-                            )
-                        elif (
-                            "month ago" in user_query.lower()
-                            or "last month" in user_query.lower()
-                        ):
-                            search_query = (
-                                f"{ticker} stock price 1 month ago historical data"
-                            )
-                        elif (
-                            "week ago" in user_query.lower()
-                            or "last week" in user_query.lower()
-                        ):
-                            search_query = (
-                                f"{ticker} stock price 1 week ago historical data"
-                            )
-                        else:
-                            search_query = (
-                                f"{ticker} stock price historical data past performance"
-                            )
-
-                    search_result_text = duckduckgo_search(
-                        search_query, max_results=5, include_date=True
-                    )
-
-                    if search_span:
-                        search_span.end(
-                            output={
-                                "search_query": search_query,
-                                "results_length": len(search_result_text),
-                            }
-                        )
-
-                    # Format the response with explicit instructions for historical context
-                    date_desc = (
-                        date_string if date_string else "the requested historical date"
-                    )
-                    historical_prompt = f"""Based on the user's query about {ticker}'s historical stock price, please provide a comprehensive answer using the following data:
-
-Historical Price Data:
-{price_result}
-
-Additional Context from Web Search:
-{search_result_text}
-
-Provide a clear answer that includes:
-1. The historical price with the specific date it represents
-2. How it compares to the current price if available
-3. The percentage change from then to now
-4. Any relevant market context from the web search about why the price changed
-5. Format all currency values in USD with a dollar sign
-
-Make sure to address the user's original query: "{user_query}"
-"""
-
-                    messages_sent_to_openai = base_messages + [
-                        {"role": "user", "content": historical_prompt}
-                    ]
-
-                    print("DEBUG: Making LLM call with Historical Price Data")
-
-                    if trace:
-                        trace.event(
-                            name="historical_price_query",
-                            output={
-                                "ticker": ticker,
-                                "date": (
-                                    date_string
-                                    if date_string
-                                    else "unspecified historical date"
-                                ),
-                                "price_result": price_result,
-                            },
-                        )
-            elif is_price_query and ticker:
+            if is_price_query and ticker:
                 print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
                 raw_ai_response = await handle_stock_price_query(
                     ticker,
@@ -1846,9 +1347,6 @@ Make sure to address the user's original query: "{user_query}"
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
 
-                # Set messages_sent_to_openai to empty list since we already have the response
-                messages_sent_to_openai = []
-
                 if trace:
                     trace.event(
                         name="stock_price_response",
@@ -1857,117 +1355,134 @@ Make sure to address the user's original query: "{user_query}"
                             "market_context_needed": needs_market_context,
                         },
                     )
-            elif search_needed:
-                print("DEBUG: Web search determined NEEDED.")
-                search_span = None
-                if trace:
-                    search_span = trace.span(name="web_search")
-
-                # For historical queries, include the date in the search
-                search_query = user_query
-                if is_historical_date_query:
-                    search_query = f"{user_query} historical data"
-
-                search_result_text = duckduckgo_search(
-                    f"{search_query} price in USD on {datetime.now():%B %d, %Y}",
-                    include_date=is_historical_date_query,
+            else:
+                # Continue with the original flow - check if web search is needed
+                search_needed = await needs_web_search(
+                    user_query, client, langfuse_client, trace
                 )
+                system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
-                if search_span:
-                    search_span.end(output={"results_length": len(search_result_text)})
+                base_messages = [
+                    {"role": "system", "content": system_prompt}
+                ] + loaded_history
 
-                contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
-                contextual_user_message_dict = {
-                    "role": "user",
-                    "content": contextual_prompt_content,
-                }
-                messages_sent_to_openai = base_messages + [contextual_user_message_dict]
-                print("DEBUG: Making LLM call with History + Search Results...")
-
+                llm_call_span = None
                 if trace:
-                    trace.event(
-                        name="web_search_used",
-                        output={
-                            "search_query": search_query,
-                            "is_historical": is_historical_date_query,
-                        },
+                    llm_call_span = trace.span(
+                        name="main_llm_call", input={"search_needed": search_needed}
                     )
-            else:
-                print("DEBUG: Web search determined NOT needed.")
-                messages_sent_to_openai = base_messages + [current_user_message_dict]
-                print("DEBUG: Making LLM call with History + Current Query...")
 
-            print(
-                f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
-            )
-            if messages_sent_to_openai:
-                print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
-                if len(messages_sent_to_openai) > 1:
-                    print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
+                if search_needed:
+                    print("DEBUG: Web search determined NEEDED.")
+                    search_span = None
+                    if trace:
+                        search_span = trace.span(name="web_search")
 
-            generation_start_time = datetime.now()
-            openai_response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_sent_to_openai,
-                tools=available_tools,
-                tool_choice="auto",
-            )
+                    search_result_text = duckduckgo_search(
+                        f"{user_query} price in USD on {datetime.now():%B %d, %Y}"
+                    )
 
-            if llm_call_span and trace:
-                llm_call_span.generation(
-                    name="openai_completion",
-                    model="gpt-4o-mini",
-                    input=messages_sent_to_openai,
-                    output=(
-                        openai_response.choices[0].message
-                        if openai_response.choices
-                        else None
-                    ),
-                    start_time=generation_start_time,
-                    end_time=datetime.now(),
-                )
+                    if search_span:
+                        search_span.end(
+                            output={"results_length": len(search_result_text)}
+                        )
 
-            response_message = openai_response.choices[0].message
-            if response_message.tool_calls:
-                print(f"DEBUG: Tool call(s) requested...")
-                tool_call_span = None
-                if trace:
-                    tool_call_span = trace.span(name="tool_calls_handling")
+                    contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
+                    contextual_user_message_dict = {
+                        "role": "user",
+                        "content": contextual_prompt_content,
+                    }
+                    messages_sent_to_openai = base_messages + [
+                        contextual_user_message_dict
+                    ]
+                    print("DEBUG: Making LLM call with History + Search Results...")
 
-                raw_ai_response = await handle_tool_calls(
-                    response_message,
-                    user_query,
-                    messages_sent_to_openai,
-                    client,
-                    langfuse_client,
-                    tool_call_span,
-                )
+                    if trace:
+                        trace.event(
+                            name="web_search_used", output={"search_query": user_query}
+                        )
+                else:
+                    print("DEBUG: Web search determined NOT needed.")
+                    messages_sent_to_openai = base_messages + [
+                        current_user_message_dict
+                    ]
+                    print("DEBUG: Making LLM call with History + Current Query...")
 
-                if tool_call_span:
-                    tool_call_span.end()
-
-            else:
-                raw_ai_response = response_message.content
                 print(
-                    f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
+                    f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+                )
+                if messages_sent_to_openai:
+                    print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
+                    if len(messages_sent_to_openai) > 1:
+                        print(
+                            f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
+                        )
+
+                generation_start_time = datetime.now()
+                openai_response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages_sent_to_openai,
+                    tools=available_tools,
+                    tool_choice="auto",
                 )
 
-            if llm_call_span:
-                llm_call_span.end()
-
-            if not raw_ai_response:
-                print("DEBUG: ERROR - No final content generated.")
-                final_response_content = "I encountered an issue."
-                raw_ai_response = None
-
-                if trace:
-                    trace.update(
-                        status="error",
-                        error={"message": "No final content generated"},
+                if llm_call_span and trace:
+                    llm_call_span.generation(
+                        name="openai_completion",
+                        model="gpt-4o-mini",
+                        input=messages_sent_to_openai,
+                        output=(
+                            openai_response.choices[0].message
+                            if openai_response.choices
+                            else None
+                        ),
+                        start_time=generation_start_time,
+                        end_time=datetime.now(),
                     )
-            else:
-                final_response_content = process_text(raw_ai_response)
-                print(f"DEBUG: Returning formatted response: {final_response_content}")
+
+                response_message = openai_response.choices[0].message
+                if response_message.tool_calls:
+                    print(f"DEBUG: Tool call(s) requested...")
+                    tool_call_span = None
+                    if trace:
+                        tool_call_span = trace.span(name="tool_calls_handling")
+
+                    raw_ai_response = await handle_tool_calls(
+                        response_message,
+                        user_query,
+                        messages_sent_to_openai,
+                        client,
+                        langfuse_client,
+                        tool_call_span,
+                    )
+
+                    if tool_call_span:
+                        tool_call_span.end()
+
+                else:
+                    raw_ai_response = response_message.content
+                    print(
+                        f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
+                    )
+
+                if llm_call_span:
+                    llm_call_span.end()
+
+                if not raw_ai_response:
+                    print("DEBUG: ERROR - No final content generated.")
+                    final_response_content = "I encountered an issue."
+                    raw_ai_response = None
+
+                    if trace:
+                        trace.update(
+                            status="error",
+                            error={"message": "No final content generated"},
+                        )
+                else:
+                    final_response_content = process_text(raw_ai_response)
+                    print(
+                        f"DEBUG: Returning formatted response: {final_response_content}"
+                    )
 
     # Error Handling
     except BadRequestError as bre:
@@ -1992,32 +1507,83 @@ Make sure to address the user's original query: "{user_query}"
         if trace:
             trace.update(
                 status="error",
-                error={"message": f"HTTP Exception: {str(http_exc)}"},
+                error={"message": http_exc.detail, "status_code": http_exc.status_code},
             )
 
         raise http_exc
     except Exception as e:
-        print(f"DEBUG: ERROR - Unhandled Exception: {str(e)}")
+        print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
+        traceback.print_exc()
         raw_ai_response = None
 
         if trace:
             trace.update(
                 status="error",
-                error={"message": f"Unhandled Exception: {str(e)}"},
+                error={"message": "Internal server error", "details": str(e)},
             )
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal Server Error: {str(e)}",
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    # --- Save History ---
+    if redis_conn and session_id and raw_ai_response:
+        try:
+            history_save_span = None
+            if trace:
+                history_save_span = trace.span(name="save_history")
+
+            new_history_entry = [
+                current_user_message_dict,
+                {"role": "assistant", "content": raw_ai_response},
+            ]
+            updated_history = loaded_history + new_history_entry
+            if len(updated_history) > MAX_HISTORY_MESSAGES:
+                updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
+                print(f"DEBUG: History truncated to {len(updated_history)} messages.")
+
+            history_to_save_json = json.dumps(updated_history)
+            print(
+                f"DEBUG: Attempting to save history for session {session_id[-6:]}. Size: {len(updated_history)} messages."
+            )
+            await redis_conn.set(
+                session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
+            )
+            print(f"DEBUG: History save successful for session {session_id[-6:]}.")
+
+            if history_save_span:
+                history_save_span.end(output={"messages_saved": len(updated_history)})
+        except Exception as e:
+            print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
+
+            if trace:
+                error_event = trace.event(
+                    name="history_save_error", output={"error": str(e)}
+                )
+
+    # --- Set Cookie ---
+    if is_new_session and session_id and redis_conn:
+        print(
+            f"DEBUG: Setting CROSS-ORIGIN cookie for new session {session_id[-6:]}..."
+        )  # Updated log message
+        response.set_cookie(
+            key="chatbotSessionId",
+            value=session_id,
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="None",  # MUST be 'None' for cross-origin
+            path="/",
+            secure=True,  # MUST be True when SameSite=None
         )
-    else:
-        # Return successful response when no exceptions occur
-        now = datetime.now().isoformat()
-        return {
-            "response": final_response_content,
-            "timestamp": now,
-            "raw_content": raw_ai_response,
-        }
+
+        if trace:
+            cookie_event = trace.event(
+                name="session_cookie_set", output={"session_id": session_id}
+            )
+
+    if trace:
+        trace.update(output={"response": final_response_content}, status="success")
+
+    print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
+    return {"response": final_response_content}
 
 
 # --- Health Check Endpoint ---
