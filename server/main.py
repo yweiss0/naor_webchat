@@ -14,10 +14,18 @@ import uuid
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 import traceback
+import time
+from langfuse import Langfuse
+from langfuse.decorators import observe
 
 # --- Configuration & Initialization ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# --- Langfuse Configuration (Read from .env) ---
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
 
 # --- Redis Configuration (Reads from .env) ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -46,6 +54,7 @@ class QueryRequest(BaseModel):
 async def lifespan(app: FastAPI):
     app.state.redis_conn = None
     app.state.openai_client = None
+    app.state.langfuse = None
     print("Lifespan: Initializing resources...")
     try:
         redis_connection = redis.Redis.from_url(
@@ -66,11 +75,34 @@ async def lifespan(app: FastAPI):
             app.state.openai_client = None
     else:
         print("Lifespan Warning: OPENAI_API_KEY not found.")
+
+    # Initialize Langfuse client
+    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
+        try:
+            app.state.langfuse = Langfuse(
+                public_key=LANGFUSE_PUBLIC_KEY,
+                secret_key=LANGFUSE_SECRET_KEY,
+                host=LANGFUSE_HOST,
+            )
+            print("Lifespan: Langfuse client created.")
+        except Exception as e:
+            print(f"Lifespan Startup Error: Could not initialize Langfuse client: {e}")
+            app.state.langfuse = None
+    else:
+        print("Lifespan Warning: Langfuse keys not found.")
+
     yield
+
     print("Lifespan: Shutting down resources...")
     if hasattr(app.state, "redis_conn") and app.state.redis_conn:
         await app.state.redis_conn.close()
         print("Lifespan: Redis connection closed.")
+
+    # Flush all Langfuse events before shutdown
+    if hasattr(app.state, "langfuse") and app.state.langfuse:
+        app.state.langfuse.flush()
+        print("Lifespan: Langfuse events flushed.")
+
     print("Lifespan: Shutdown complete.")
 
 
@@ -97,7 +129,9 @@ app.add_middleware(
 
 
 # --- Helper Functions --- (Keep as they are)
-async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool:
+async def is_related_to_stocks_crypto(
+    query: str, client: OpenAI | None, langfuse: Langfuse | None = None
+) -> bool:
     """
     Determines if the query is related to stocks, cryptocurrency, or trading using OpenAI.
     Returns True if related, False otherwise.
@@ -107,6 +141,23 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         return False
 
     print(f"Classifying if query is related to stocks/crypto: '{query}'")
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id, name="stock_crypto_classification", metadata={"query": query}
+        )
+        span = trace.span(
+            name="classify_stocks_crypto",
+            metadata={
+                "status": f"Classifying if query is related to stocks/crypto: '{query}'"
+            },
+        )
+
+    start_time = time.time()
     try:
         classification_messages = [
             {
@@ -137,6 +188,9 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
             temperature=0.0,
         )
 
+        # Calculate latency
+        latency = time.time() - start_time
+
         # Parse the response content
         if (
             response.choices
@@ -144,16 +198,51 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
             and response.choices[0].message.content
         ):
             result_text = response.choices[0].message.content.strip().lower()
+            result = "true" in result_text
             print(f"Stock/crypto classification result: '{result_text}'")
-            return "true" in result_text
+
+            # Log the result in Langfuse
+            if span:
+                span.end(
+                    output=result_text,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "result": result,
+                        "status": f"Stock/crypto classification result: '{result_text}'",
+                    },
+                )
+
+            return result
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+            if span:
+                span.end(
+                    output=None,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "error": "Could not parse classification response",
+                        "status": "Warning: Could not parse classification response. Defaulting to False.",
+                    },
+                )
             return False
 
     except Exception as e:
-        print(f"Error during stock/crypto classification: {e}")
+        error_msg = f"Error during stock/crypto classification: {e}"
+        print(error_msg)
+        if span:
+            span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
         return False
 
 
@@ -302,7 +391,9 @@ def load_qa_file() -> dict:
         return {}
 
 
-async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, str]:
+async def find_qa_match(
+    user_query: str, client: OpenAI | None, langfuse: Langfuse | None = None
+) -> tuple[bool, str]:
     """
     Check if the user query matches a question in the Q&A file.
     Returns a tuple of (is_match, answer_or_empty_string)
@@ -318,6 +409,21 @@ async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, s
         return (False, "")
 
     print(f"Checking if query matches Q&A file: '{user_query}'")
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id, name="qa_match", metadata={"query": user_query}
+        )
+        span = trace.span(
+            name="find_qa_match",
+            metadata={"status": f"Checking if query matches Q&A file: '{user_query}'"},
+        )
+
+    start_time = time.time()
     try:
         # Create a prompt for the LLM to find the best match
         qa_text = "\n\n".join([f"Q: {q}\nA: {a}" for q, a in qa_dict.items()])
@@ -351,6 +457,9 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
             temperature=0.0,
         )
 
+        # Calculate latency
+        latency = time.time() - start_time
+
         # Parse the response content
         if (
             response.choices
@@ -361,6 +470,16 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
 
             if result_text == "NO_MATCH":
                 print("No Q&A match found for the query.")
+                if span:
+                    span.end(
+                        output="NO_MATCH",
+                        metadata={
+                            "model": "gpt-4o-mini",
+                            "latency": latency,
+                            "result": False,
+                            "status": "No Q&A match found for the query.",
+                        },
+                    )
                 return (False, "")
             else:
                 # Remove "A: " prefix if it exists
@@ -368,21 +487,52 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
                     result_text = result_text[3:].strip()
 
                 print("Q&A match found for the query.")
+                if span:
+                    span.end(
+                        output=result_text,
+                        metadata={
+                            "model": "gpt-4o-mini",
+                            "latency": latency,
+                            "result": True,
+                            "status": "Q&A match found for the query.",
+                        },
+                    )
                 return (True, result_text)
         else:
             print(
                 "Warning: Could not parse Q&A matching response. Defaulting to no match."
             )
+            if span:
+                span.end(
+                    output=None,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "error": "Could not parse Q&A matching response",
+                        "status": "Warning: Could not parse Q&A matching response. Defaulting to no match.",
+                    },
+                )
             return (False, "")
 
     except Exception as e:
-        print(f"Error during Q&A matching: {e}")
+        error_msg = f"Error during Q&A matching: {e}"
+        print(error_msg)
+        if span:
+            span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
         return (False, "")
 
 
 # --- New Function: Check if query is about current stock price ---
 async def is_stock_price_query(
-    user_query: str, client: OpenAI | None
+    user_query: str, client: OpenAI | None, langfuse: Langfuse | None = None
 ) -> tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
@@ -393,6 +543,25 @@ async def is_stock_price_query(
         return (False, "", False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id,
+            name="stock_price_query_classification",
+            metadata={"query": user_query},
+        )
+        span = trace.span(
+            name="classify_stock_price_query",
+            metadata={
+                "status": f"Classifying if query is about current stock price: '{user_query}'"
+            },
+        )
+
+    start_time = time.time()
     try:
         classification_messages = [
             {
@@ -430,6 +599,9 @@ async def is_stock_price_query(
             response_format={"type": "json_object"},
         )
 
+        # Calculate latency
+        latency = time.time() - start_time
+
         # Parse the response content
         if (
             response.choices
@@ -446,18 +618,66 @@ async def is_stock_price_query(
                 print(
                     f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
+
+                if span:
+                    span.end(
+                        output=result_text,
+                        metadata={
+                            "model": "gpt-4o-mini",
+                            "latency": latency,
+                            "result": {
+                                "is_price_query": is_price_query,
+                                "ticker": ticker,
+                                "needs_market_context": needs_market_context,
+                            },
+                            "status": f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}",
+                        },
+                    )
+
                 return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
-                print(f"Warning: Could not parse JSON response: {result_text}")
+                error_msg = f"Warning: Could not parse JSON response: {result_text}"
+                print(error_msg)
+                if span:
+                    span.end(
+                        output=result_text,
+                        metadata={
+                            "model": "gpt-4o-mini",
+                            "latency": latency,
+                            "error": "JSON decode error",
+                            "status": error_msg,
+                        },
+                    )
                 return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+            if span:
+                span.end(
+                    output=None,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "error": "Could not parse classification response",
+                        "status": "Warning: Could not parse classification response. Defaulting to False.",
+                    },
+                )
             return (False, "", False)
 
     except Exception as e:
-        print(f"Error during stock price query classification: {e}")
+        error_msg = f"Error during stock price query classification: {e}"
+        print(error_msg)
+        if span:
+            span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
         return (False, "", False)
 
 
@@ -467,11 +687,33 @@ async def handle_stock_price_query(
     user_query: str,
     client: OpenAI | None,
     needs_market_context: bool = False,
+    langfuse: Langfuse | None = None,
 ) -> str:
     """Handles direct stock price queries using Yahoo Finance."""
     print(
         f"Handling direct stock price query for ticker: {ticker}, needs_market_context: {needs_market_context}"
     )
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id,
+            name="stock_price_query_handler",
+            metadata={
+                "query": user_query,
+                "ticker": ticker,
+                "needs_market_context": needs_market_context,
+            },
+        )
+        span = trace.span(
+            name="handle_stock_price",
+            metadata={
+                "status": f"Handling direct stock price query for ticker: {ticker}, needs_market_context: {needs_market_context}"
+            },
+        )
 
     # Get price and historical data if market context is needed
     price, historical_data = get_stock_price(
@@ -515,16 +757,48 @@ async def handle_stock_price_query(
         {"role": "user", "content": user_message_content},
     ]
 
+    start_time = time.time()
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
         )
 
+        # Calculate latency
+        latency = time.time() - start_time
+
         final_content = response.choices[0].message.content
+
+        if span:
+            span.end(
+                output=final_content,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "latency": latency,
+                    "price_data": {
+                        "ticker": ticker,
+                        "price": price,
+                        "has_historical_data": historical_data is not None,
+                    },
+                },
+            )
+
         return final_content
     except Exception as e:
-        print(f"Error formatting stock price response: {e}")
+        error_msg = f"Error formatting stock price response: {e}"
+        print(error_msg)
+
+        if span:
+            span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
+
         return f"The latest price for {ticker} is: {price}"
 
 
@@ -565,9 +839,26 @@ available_tools = [stock_price_function, web_search_function]
 # --- Core Logic ---
 
 
-async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
+async def needs_web_search(
+    user_query: str, client: OpenAI | None, langfuse: Langfuse | None = None
+) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id,
+            name="web_search_need_classification",
+            metadata={"query": user_query},
+        )
+        span = trace.span(
+            name="classify_web_search_need",
+            metadata={"status": f"Classifying web search need for: '{user_query}'"},
+        )
 
     # Check for specific keywords that should always trigger web search
     web_search_keywords = [
@@ -627,21 +918,20 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         "what's the condition",
         "what's the state",
         "what's the status",
-        "what's the situation",
-        "what's the outlook",
-        "what's the forecast",
-        "what's the prediction",
-        "what's the trend",
-        "what's the sentiment",
-        "what's the mood",
-        "what's the condition",
-        "what's the state",
-        "what's the status",
     ]
 
     # Check if any of the web search keywords are in the query
     if any(keyword in query_lower for keyword in web_search_keywords):
         print(f"DEBUG: Query contains web search keyword, triggering web search.")
+        if span:
+            span.end(
+                output=True,
+                metadata={
+                    "result": True,
+                    "reason": "keyword_match",
+                    "status": "DEBUG: Query contains web search keyword, triggering web search.",
+                },
+            )
         return True
 
     recall_keywords = [
@@ -657,11 +947,31 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         key in query_lower for key in recall_keywords
     ):
         print("DEBUG: Query classified as recall, skipping web search.")
+        if span:
+            span.end(
+                output=False,
+                metadata={
+                    "result": False,
+                    "reason": "recall_query",
+                    "status": "DEBUG: Query classified as recall, skipping web search.",
+                },
+            )
         return False
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
+        if span:
+            span.end(
+                output=False,
+                metadata={
+                    "result": False,
+                    "reason": "openai_client_missing",
+                    "status": "DEBUG: needs_web_search - OpenAI client is None, cannot classify.",
+                },
+            )
         return False
+
+    start_time = time.time()
     try:
         classification_messages = [
             {
@@ -692,26 +1002,68 @@ Do NOT say True if the user is asking about the conversation history or what was
             max_tokens=5,
             temperature=0.0,
         )
+
+        # Calculate latency
+        latency = time.time() - start_time
+
         if (
             response.choices
             and response.choices[0].message
             and response.choices[0].message.content
         ):
             result_text = response.choices[0].message.content.strip().lower()
+            result = "true" in result_text
             print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
-            return "true" in result_text
+
+            if span:
+                span.end(
+                    output=result_text,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "result": result,
+                        "status": f"DEBUG: Web search classification result from LLM: '{result_text}'",
+                    },
+                )
+
+            return result
         else:
             print(
                 "DEBUG: Could not parse classification response. Defaulting to False."
             )
+            if span:
+                span.end(
+                    output=None,
+                    metadata={
+                        "model": "gpt-4o-mini",
+                        "latency": latency,
+                        "error": "Could not parse classification response",
+                        "status": "DEBUG: Could not parse classification response. Defaulting to False.",
+                    },
+                )
             return False
     except Exception as e:
-        print(f"DEBUG: Error during classification LLM call: {e}")
+        error_msg = f"DEBUG: Error during classification LLM call: {e}"
+        print(error_msg)
+        if span:
+            span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
         return False
 
 
 async def handle_tool_calls(
-    response_message, user_query: str, messages_history: list, client: OpenAI | None
+    response_message,
+    user_query: str,
+    messages_history: list,
+    client: OpenAI | None,
+    langfuse: Langfuse | None = None,
 ) -> str:
     if not client:
         return "Error: OpenAI client not available."
@@ -720,6 +1072,26 @@ async def handle_tool_calls(
         return response_message.content or "Error: No tool calls or content."
 
     print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
+
+    # Start Langfuse trace if available
+    trace = None
+    span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        trace = langfuse.trace(
+            id=trace_id,
+            name="handle_tool_calls",
+            metadata={
+                "query": user_query,
+                "tool_calls_count": len(tool_calls),
+                "tool_call_ids": [tc.id for tc in tool_calls],
+            },
+        )
+        span = trace.span(
+            name="process_tool_calls",
+            metadata={"status": f"DEBUG: Handling {len(tool_calls)} tool call(s)..."},
+        )
+
     messages_for_follow_up = messages_history + [response_message]
 
     for tool_call in tool_calls:
@@ -727,6 +1099,19 @@ async def handle_tool_calls(
         function_args_str = tool_call.function.arguments
         tool_call_id = tool_call.id
         result_content = ""
+
+        # Create a span for each tool call
+        tool_span = None
+        if span:
+            tool_span = span.span(
+                name=f"tool_call_{function_name}",
+                metadata={
+                    "tool_call_id": tool_call_id,
+                    "function_name": function_name,
+                    "function_args": function_args_str,
+                },
+            )
+
         try:
             args_dict = json.loads(function_args_str)
             if function_name == "get_stock_price":
@@ -748,12 +1133,29 @@ async def handle_tool_calls(
                 )
             else:
                 result_content = f"Error: Unknown function '{function_name}'."
+
             print(
                 f"DEBUG: Tool '{function_name}' executed. Result snippet: {result_content[:50]}..."
             )
+
+            if tool_span:
+                tool_span.end(
+                    output=result_content[:200]
+                    + ("..." if len(result_content) > 200 else ""),
+                    metadata={
+                        "status": f"DEBUG: Tool '{function_name}' executed successfully."
+                    },
+                )
+
         except Exception as e:
-            print(f"DEBUG: Error executing tool {function_name}: {e}")
+            error_msg = f"DEBUG: Error executing tool {function_name}: {e}"
+            print(error_msg)
             result_content = f"Error executing tool: {e}"
+
+            if tool_span:
+                tool_span.end(
+                    output=None, metadata={"error": str(e), "status": error_msg}
+                )
 
         messages_for_follow_up.append(
             {
@@ -765,6 +1167,16 @@ async def handle_tool_calls(
         )
 
     print("DEBUG: Making follow-up LLM call with tool results...")
+    follow_up_span = None
+    if span:
+        follow_up_span = span.span(
+            name="follow_up_llm_call",
+            metadata={
+                "status": "DEBUG: Making follow-up LLM call with tool results..."
+            },
+        )
+
+    start_time = time.time()
     try:
         # Add a system message to emphasize the importance of current information
         follow_up_messages = [
@@ -777,13 +1189,54 @@ async def handle_tool_calls(
         follow_up_response = client.chat.completions.create(
             model="gpt-4o-mini", messages=follow_up_messages
         )
+
+        # Calculate latency
+        latency = time.time() - start_time
+
         final_content = follow_up_response.choices[0].message.content
         print(
             f"DEBUG: Follow-up Response snippet: {final_content[:50] if final_content else 'None'}..."
         )
+
+        if follow_up_span:
+            follow_up_span.end(
+                output=final_content[:200]
+                + ("..." if final_content and len(final_content) > 200 else ""),
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "latency": latency,
+                    "status": f"DEBUG: Follow-up Response received successfully.",
+                },
+            )
+
+        if span:
+            span.end(
+                output=final_content[:200]
+                + ("..." if final_content and len(final_content) > 200 else ""),
+                metadata={
+                    "status": "Tool calls processed and follow-up response received successfully."
+                },
+            )
+
         return final_content or "Error: No content in follow-up."
     except Exception as e:
-        print(f"DEBUG: Error during follow-up LLM call: {e}")
+        error_msg = f"DEBUG: Error during follow-up LLM call: {e}"
+        print(error_msg)
+
+        if follow_up_span:
+            follow_up_span.end(
+                output=None,
+                metadata={
+                    "model": "gpt-4o-mini",
+                    "error": str(e),
+                    "latency": time.time() - start_time,
+                    "status": error_msg,
+                },
+            )
+
+        if span:
+            span.end(output=None, metadata={"error": str(e), "status": error_msg})
+
         return f"Error summarizing tool results."
 
 
@@ -792,6 +1245,7 @@ async def handle_tool_calls(
 async def chat(query: QueryRequest, request: Request, response: Response):
     redis_conn = request.app.state.redis_conn
     client = request.app.state.openai_client
+    langfuse = request.app.state.langfuse
 
     if not client:
         raise HTTPException(
@@ -811,8 +1265,39 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     print(f"DEBUG: User Query: {user_query}")
     print(f"DEBUG: Cookie 'chatbotSessionId' value: {session_id}")
 
+    # Create main trace for the entire request
+    main_trace = None
+    chat_span = None
+    if langfuse:
+        trace_id = str(uuid.uuid4())
+        main_trace = langfuse.trace(
+            id=trace_id,
+            name="chat_request",
+            metadata={
+                "query": user_query,
+                "session_id": session_id,
+                "is_new_session": session_id is None,
+            },
+            user_id=session_id,
+        )
+        chat_span = main_trace.span(
+            name="process_chat_request",
+            metadata={
+                "status": f"Processing chat request for session {session_id[-6:] if session_id else 'NEW'}"
+            },
+        )
+
     # Load History
     if redis_conn and session_id:
+        history_span = None
+        if chat_span:
+            history_span = chat_span.span(
+                name="load_history",
+                metadata={
+                    "status": f"DEBUG: Attempting to load history for session {session_id[-6:]}..."
+                },
+            )
+
         print(f"DEBUG: Attempting to load history for session {session_id[-6:]}...")
         try:
             history_json = await redis_conn.get(session_id)
@@ -824,23 +1309,68 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     )
                     loaded_history = []
                     session_id = None
+
+                    if history_span:
+                        history_span.end(
+                            output=None,
+                            metadata={
+                                "error": f"Corrupt history type: {type(loaded_history)}",
+                                "status": "DEBUG: ERROR - Corrupt history type. Resetting.",
+                            },
+                        )
                 else:
                     print(f"DEBUG: Successfully loaded {len(loaded_history)} messages.")
                     if loaded_history:
                         print(f"DEBUG: Last loaded msg: {loaded_history[-1]}")
                     await redis_conn.expire(session_id, SESSION_TTL_SECONDS)
+
+                    if history_span:
+                        history_span.end(
+                            output=len(loaded_history),
+                            metadata={
+                                "history_size": len(loaded_history),
+                                "status": f"DEBUG: Successfully loaded {len(loaded_history)} messages.",
+                            },
+                        )
             else:
                 print(f"DEBUG: Session ID {session_id[-6:]} not found in Redis.")
                 session_id = None
+
+                if history_span:
+                    history_span.end(
+                        output=None,
+                        metadata={
+                            "error": "Session not found",
+                            "status": f"DEBUG: Session ID {session_id[-6:]} not found in Redis.",
+                        },
+                    )
         except json.JSONDecodeError as json_err:
             print(
                 f"DEBUG: ERROR - JSON Decode failed for session {session_id}: {json_err}. Resetting."
             )
             session_id = None
+
+            if history_span:
+                history_span.end(
+                    output=None,
+                    metadata={
+                        "error": f"JSON Decode error: {str(json_err)}",
+                        "status": f"DEBUG: ERROR - JSON Decode failed for session. Resetting.",
+                    },
+                )
         except Exception as e:
             print(
                 f"DEBUG: ERROR - Redis GET/EXPIRE failed: {e}. Proceeding without history."
             )
+
+            if history_span:
+                history_span.end(
+                    output=None,
+                    metadata={
+                        "error": f"Redis error: {str(e)}",
+                        "status": f"DEBUG: ERROR - Redis GET/EXPIRE failed. Proceeding without history.",
+                    },
+                )
 
     # Create New Session ID
     if redis_conn and not session_id:
@@ -848,6 +1378,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         session_id = str(uuid.uuid4())
         print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
         loaded_history = []
+
+        if main_trace and session_id:
+            # Update trace with new session ID
+            main_trace.update(user_id=session_id)
 
     # Core Logic
     final_response_content = ""
@@ -857,45 +1391,160 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     # Define current_user_message_dict at the beginning to ensure it's always available
     current_user_message_dict = {"role": "user", "content": user_query}
 
+    processing_span = None
+    if chat_span:
+        processing_span = chat_span.span(
+            name="process_query", metadata={"status": "Starting query processing"}
+        )
+
     try:
         # First check if the query matches a question in the Q&A file
-        qa_match, qa_answer = await find_qa_match(user_query, client)
+        qa_match, qa_answer = await find_qa_match(user_query, client, langfuse)
 
         if qa_match:
             print(f"DEBUG: Q&A match found, using predefined answer.")
             raw_ai_response = qa_answer
             final_response_content = process_text(raw_ai_response)
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
+
+            if processing_span:
+                processing_span.end(
+                    output=final_response_content,
+                    metadata={
+                        "response_type": "qa_match",
+                        "status": "DEBUG: Q&A match found, using predefined answer.",
+                    },
+                )
         else:
             # If no Q&A match, check if the query is related to stocks/crypto
-            if not await is_related_to_stocks_crypto(user_query, client):
+            stocks_related_span = None
+            if processing_span:
+                stocks_related_span = processing_span.span(
+                    name="check_stocks_related",
+                    metadata={
+                        "status": "Checking if query is related to stocks/crypto"
+                    },
+                )
+
+            if not await is_related_to_stocks_crypto(user_query, client, langfuse):
                 print("Query not related. Returning restricted response.")
+
+                if stocks_related_span:
+                    stocks_related_span.end(
+                        output=False,
+                        metadata={
+                            "result": False,
+                            "status": "Query not related. Returning restricted response.",
+                        },
+                    )
+
+                if processing_span:
+                    processing_span.end(
+                        output="I can only answer questions about stocks, cryptocurrency, or trading.",
+                        metadata={
+                            "response_type": "restricted",
+                            "status": "Query not related to stocks/crypto/trading.",
+                        },
+                    )
+
+                if chat_span:
+                    chat_span.end(
+                        output="I can only answer questions about stocks, cryptocurrency, or trading.",
+                        metadata={
+                            "session_id": session_id,
+                            "response_type": "restricted",
+                        },
+                    )
+
                 return {
                     "response": "I can only answer questions about stocks, cryptocurrency, or trading."
                 }
 
+            if stocks_related_span:
+                stocks_related_span.end(
+                    output=True,
+                    metadata={
+                        "result": True,
+                        "status": "Query is related to stocks/crypto/trading.",
+                    },
+                )
+
             # First check if this is a direct stock price query
+            stock_price_span = None
+            if processing_span:
+                stock_price_span = processing_span.span(
+                    name="check_stock_price_query",
+                    metadata={"status": "Checking if query is about stock price"},
+                )
+
             is_price_query, ticker, needs_market_context = await is_stock_price_query(
-                user_query, client
+                user_query, client, langfuse
             )
+
+            if stock_price_span:
+                stock_price_span.end(
+                    output={
+                        "is_price_query": is_price_query,
+                        "ticker": ticker,
+                        "needs_market_context": needs_market_context,
+                    },
+                    metadata={
+                        "status": f"Stock price query check complete: is_price_query={is_price_query}, ticker={ticker}"
+                    },
+                )
 
             if is_price_query and ticker:
                 print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
                 raw_ai_response = await handle_stock_price_query(
-                    ticker, user_query, client, needs_market_context
+                    ticker, user_query, client, needs_market_context, langfuse
                 )
                 final_response_content = process_text(raw_ai_response)
                 print(
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
+
+                if processing_span:
+                    processing_span.end(
+                        output=final_response_content,
+                        metadata={
+                            "response_type": "stock_price",
+                            "ticker": ticker,
+                            "needs_market_context": needs_market_context,
+                            "status": "DEBUG: Direct stock price query processed successfully.",
+                        },
+                    )
             else:
                 # Continue with the original flow - check if web search is needed
-                search_needed = await needs_web_search(user_query, client)
+                web_search_span = None
+                if processing_span:
+                    web_search_span = processing_span.span(
+                        name="check_web_search_need",
+                        metadata={"status": "Checking if web search is needed"},
+                    )
+
+                search_needed = await needs_web_search(user_query, client, langfuse)
+
+                if web_search_span:
+                    web_search_span.end(
+                        output=search_needed,
+                        metadata={
+                            "result": search_needed,
+                            "status": f"Web search need check complete: {search_needed}",
+                        },
+                    )
+
                 system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
                 base_messages = [
                     {"role": "system", "content": system_prompt}
                 ] + loaded_history
+
+                llm_call_span = None
+                if processing_span:
+                    llm_call_span = processing_span.span(
+                        name="prepare_llm_call",
+                        metadata={"status": "Preparing LLM call"},
+                    )
 
                 if search_needed:
                     print("DEBUG: Web search determined NEEDED.")
@@ -911,12 +1560,33 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         contextual_user_message_dict
                     ]
                     print("DEBUG: Making LLM call with History + Search Results...")
+
+                    if llm_call_span:
+                        llm_call_span.end(
+                            output=len(messages_sent_to_openai),
+                            metadata={
+                                "messages_count": len(messages_sent_to_openai),
+                                "web_search_used": True,
+                                "search_results_length": len(search_result_text),
+                                "status": "DEBUG: Making LLM call with History + Search Results...",
+                            },
+                        )
                 else:
                     print("DEBUG: Web search determined NOT needed.")
                     messages_sent_to_openai = base_messages + [
                         current_user_message_dict
                     ]
                     print("DEBUG: Making LLM call with History + Current Query...")
+
+                    if llm_call_span:
+                        llm_call_span.end(
+                            output=len(messages_sent_to_openai),
+                            metadata={
+                                "messages_count": len(messages_sent_to_openai),
+                                "web_search_used": False,
+                                "status": "DEBUG: Making LLM call with History + Current Query...",
+                            },
+                        )
 
                 print(
                     f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
@@ -928,6 +1598,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
                         )
 
+                main_llm_span = None
+                if processing_span:
+                    main_llm_span = processing_span.span(
+                        name="main_llm_call",
+                        metadata={"status": "Making main LLM call to OpenAI"},
+                    )
+
+                start_time = time.time()
                 openai_response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=messages_sent_to_openai,
@@ -935,46 +1613,216 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     tool_choice="auto",
                 )
 
+                # Calculate latency
+                latency = time.time() - start_time
+
                 response_message = openai_response.choices[0].message
+
+                if main_llm_span:
+                    main_llm_span.end(
+                        output=response_message.content[:200]
+                        + (
+                            "..."
+                            if response_message.content
+                            and len(response_message.content) > 200
+                            else ""
+                        ),
+                        metadata={
+                            "model": "gpt-4o-mini",
+                            "latency": latency,
+                            "has_tool_calls": response_message.tool_calls is not None,
+                            "tool_calls_count": (
+                                len(response_message.tool_calls)
+                                if response_message.tool_calls
+                                else 0
+                            ),
+                            "status": "Main LLM call completed successfully.",
+                        },
+                    )
+
+                tool_processing_span = None
+                if processing_span:
+                    if response_message.tool_calls:
+                        tool_processing_span = processing_span.span(
+                            name="process_tool_calls",
+                            metadata={"status": "Processing tool calls"},
+                        )
+                    else:
+                        tool_processing_span = processing_span.span(
+                            name="process_direct_response",
+                            metadata={"status": "Processing direct text response"},
+                        )
+
                 if response_message.tool_calls:
                     print(f"DEBUG: Tool call(s) requested...")
                     raw_ai_response = await handle_tool_calls(
-                        response_message, user_query, messages_sent_to_openai, client
+                        response_message,
+                        user_query,
+                        messages_sent_to_openai,
+                        client,
+                        langfuse,
                     )
+
+                    if tool_processing_span:
+                        tool_processing_span.end(
+                            output=raw_ai_response[:200]
+                            + (
+                                "..."
+                                if raw_ai_response and len(raw_ai_response) > 200
+                                else ""
+                            ),
+                            metadata={"status": "Tool calls processed successfully."},
+                        )
                 else:
                     raw_ai_response = response_message.content
                     print(
                         f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
                     )
 
+                    if tool_processing_span:
+                        tool_processing_span.end(
+                            output=raw_ai_response[:200]
+                            + (
+                                "..."
+                                if raw_ai_response and len(raw_ai_response) > 200
+                                else ""
+                            ),
+                            metadata={"status": "Direct text response processed."},
+                        )
+
+                final_processing_span = None
+                if processing_span:
+                    final_processing_span = processing_span.span(
+                        name="final_processing",
+                        metadata={"status": "Final response processing"},
+                    )
+
                 if not raw_ai_response:
                     print("DEBUG: ERROR - No final content generated.")
                     final_response_content = "I encountered an issue."
                     raw_ai_response = None
+
+                    if final_processing_span:
+                        final_processing_span.end(
+                            output="I encountered an issue.",
+                            metadata={
+                                "error": "No content generated",
+                                "status": "DEBUG: ERROR - No final content generated.",
+                            },
+                        )
                 else:
                     final_response_content = process_text(raw_ai_response)
                     print(
                         f"DEBUG: Returning formatted response: {final_response_content}"
                     )
 
+                    if final_processing_span:
+                        final_processing_span.end(
+                            output=final_response_content,
+                            metadata={
+                                "status": "DEBUG: Final response formatted successfully."
+                            },
+                        )
+
+                if processing_span:
+                    processing_span.end(
+                        output=final_response_content,
+                        metadata={
+                            "response_type": "llm_generated",
+                            "web_search_used": search_needed,
+                            "tool_calls_used": response_message.tool_calls is not None,
+                            "status": "Query processing completed successfully.",
+                        },
+                    )
+
     # Error Handling
     except BadRequestError as bre:
         print(f"DEBUG: ERROR - OpenAI Bad Request: {bre}")
         raw_ai_response = None
+
+        if processing_span:
+            processing_span.end(
+                output=None,
+                metadata={
+                    "error_type": "bad_request",
+                    "error": str(bre),
+                    "status": f"DEBUG: ERROR - OpenAI Bad Request: {bre}",
+                },
+            )
+
+        if chat_span:
+            chat_span.end(
+                output=None,
+                metadata={
+                    "error_type": "bad_request",
+                    "error": str(bre),
+                    "status": f"DEBUG: ERROR - OpenAI Bad Request: {bre}",
+                },
+            )
+
         raise HTTPException(
             status_code=400,
             detail=f"API Error: {bre.body.get('message', 'Bad Request')}",
         )
     except HTTPException as http_exc:
         raw_ai_response = None
+
+        if processing_span:
+            processing_span.end(
+                output=None,
+                metadata={
+                    "error_type": "http_exception",
+                    "error": str(http_exc),
+                    "status": f"DEBUG: ERROR - HTTP Exception: {http_exc}",
+                },
+            )
+
+        if chat_span:
+            chat_span.end(
+                output=None,
+                metadata={
+                    "error_type": "http_exception",
+                    "error": str(http_exc),
+                    "status": f"DEBUG: ERROR - HTTP Exception: {http_exc}",
+                },
+            )
+
         raise http_exc
     except Exception as e:
         print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
         traceback.print_exc()
         raw_ai_response = None
+
+        if processing_span:
+            processing_span.end(
+                output=None,
+                metadata={
+                    "error_type": "critical",
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
+                    "status": f"DEBUG: ERROR - Critical error in chat endpoint: {e}",
+                },
+            )
+
+        if chat_span:
+            chat_span.end(
+                output=None,
+                metadata={
+                    "error_type": "critical",
+                    "error": str(e),
+                    "status": f"DEBUG: ERROR - Critical error in chat endpoint: {e}",
+                },
+            )
+
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
+    history_save_span = None
+    if chat_span:
+        history_save_span = chat_span.span(
+            name="save_history", metadata={"status": "Saving conversation history"}
+        )
+
     if redis_conn and session_id and raw_ai_response:
         try:
             new_history_entry = [
@@ -994,8 +1842,33 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
             print(f"DEBUG: History save successful for session {session_id[-6:]}.")
+
+            if history_save_span:
+                history_save_span.end(
+                    output=len(updated_history),
+                    metadata={
+                        "history_size": len(updated_history),
+                        "status": f"DEBUG: History save successful for session {session_id[-6:]}.",
+                    },
+                )
         except Exception as e:
             print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
+
+            if history_save_span:
+                history_save_span.end(
+                    output=None,
+                    metadata={
+                        "error": str(e),
+                        "status": f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.",
+                    },
+                )
+    elif history_save_span:
+        history_save_span.end(
+            output=None,
+            metadata={
+                "status": "History not saved - missing redis, session_id, or response."
+            },
+        )
 
     # --- Set Cookie ---
     if is_new_session and session_id and redis_conn:
@@ -1010,6 +1883,19 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             samesite="None",  # MUST be 'None' for cross-origin
             path="/",
             secure=True,  # MUST be True when SameSite=None
+        )
+
+    if chat_span:
+        chat_span.end(
+            output=final_response_content,
+            metadata={
+                "session_id": session_id,
+                "is_new_session": is_new_session,
+                "response_length": (
+                    len(final_response_content) if final_response_content else 0
+                ),
+                "status": "Chat request processed successfully.",
+            },
         )
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
