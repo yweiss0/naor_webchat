@@ -6,3 +6,4 @@ python-dotenv
 langchain_community
 duckduckgo-search
 redis>=4.2
+langfuse

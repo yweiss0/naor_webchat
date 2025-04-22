@@ -49,7 +49,7 @@
                 role: 'user',
                 content: messageInput.trim()
             };
-            
+
             // Add temporary thinking message
             const thinkingMessage = {
                 id: Date.now() + 1,
@@ -57,49 +57,65 @@
                 content: 'Thinking...',
                 status: 'thinking'
             };
-            
+
             messages = [...messages, userMessage, thinkingMessage];
             messageInput = '';
 
             // Scroll after adding user message and thinking message
             if(messagesContainer) scrollToBottom(messagesContainer);
-            
+
             try {
-                const response = await fetch('https://nextdawnai.cloud/api/chat', {
+                const response = await fetch('localhost:8000/api/chat', { // Your backend URL
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: userMessage.content }),
+                    credentials: 'include' // *** Ensure this line is present ***
                 });
-                
+
+                // Check for HTTP errors first
+                if (!response.ok) {
+                    let errorDetail = `HTTP error ${response.status}`;
+                    try {
+                        // Try to get more specific error from backend response body
+                        const errorData = await response.json();
+                        errorDetail = errorData.detail || errorDetail;
+                    } catch (e) {
+                        // Ignore if response body isn't JSON or empty
+                        errorDetail = `${errorDetail}: ${response.statusText}`;
+                    }
+                    throw new Error(errorDetail); // Throw an error to be caught below
+                }
+
                 const data = await response.json();
                 const aiMessage = {
-                    id: Date.now() + 2,
+                    id: Date.now() + 2, // Ensure unique ID
                     role: 'assistant',
                     content: '',
                     status: 'typing'
                 };
-                
+
                 // Replace thinking message with typing message
                 messages = messages.filter(m => m.id !== thinkingMessage.id);
                 messages = [...messages, aiMessage];
                 typingMessageId = aiMessage.id;
-                
+
                 // Start typing animation
                 await typeMessage(data.response, aiMessage.id);
-                
-            } catch (error) {
-                console.error('Error:', error);
-                messages = [...messages, {
-                    role: 'assistant',
-                    content: 'Sorry, something went wrong.'
-                }];
 
+            } catch (error) {
+                // Catch both network errors and HTTP errors thrown above
+                console.error('Error submitting message:', error);
+                messages = messages.filter(m => m.id !== thinkingMessage.id); // Remove thinking message
+                messages = [...messages, {
+                    id: Date.now() + 3, // Unique ID
+                    role: 'assistant',
+                    content: `Sorry, there was an error: ${error.message}` // Display error
+                }];
                  // Scroll after error
                 if(messagesContainer) scrollToBottom(messagesContainer);
             } finally {
                 isLoading = false;
                 typingMessageId = null;
-
                 // Scroll after AI message is complete (or error)
                 if(messagesContainer) scrollToBottom(messagesContainer);
             }
@@ -115,8 +131,7 @@
         };
         messages = [...messages, aiMessage];
         typingMessageId = aiMessage.id;
-        await typeMessage("Hello, how can I help you?", aiMessage.id);
-    }
+        await typeMessage("Hi there! I’m Nixi, your trading assistant.\n Need market insights, stock updates, or strategy tips? I’ve got you covered! What’s on your mind today?", aiMessage.id);}
 
     function handleKeyPress(event) {
         if (event.key === 'Enter' && !event.shiftKey) {
@@ -194,11 +209,11 @@
 
 {#if isChatOpen}
     <div 
-    class="fixed bottom-5 right-0 mr-4 bg-white p-6 rounded-lg border border-[#e5e7eb] w-[440px] h-[450px] lg:h-[550px] flex flex-col z-50"
+    class="fixed bottom-5 right-0 mr-4 bg-white p-6 rounded-lg border border-[#e5e7eb] w-[400px] h-[400px] lg:h-[550px] flex flex-col z-50"
     style="box-shadow: 0 0 #0000, 0 0 #0000, 0 1px 2px 0 rgb(0 0 0 / 0.05);"
     >
         <div class="flex flex-col space-y-1.5 pb-6">
-        <h2 class="font-semibold text-lg tracking-tight">Chatbot</h2>
+        <h2 class="font-semibold text-lg tracking-tight text-black">NRDX AI Bot</h2>
         </div>
         <button 
             class="absolute top-2 right-2 text-gray-500 hover:text-red-500 text-xl"
@@ -210,44 +225,45 @@
         {#each messages as message}
             {#if message.role === 'user'}
             <!-- User message aligned to left -->
-            <div class="flex gap-3 my-4 text-gray-600 text-sm">
+            <div class="flex gap-3 my-4 text-[#CCFF00] text-sm">
                 <span class="relative flex shrink-0 overflow-hidden rounded-full w-8 h-8">
-                    <div class="rounded-full bg-gray-100 border p-1">
+                    <div class="rounded-full bg-[#CCFF00] border p-1">
                         <svg fill="black" viewBox="0 0 16 16" height="20" width="20">
                             <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4Zm-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664h10Z"></path>
                         </svg>
                     </div>
                 </span>
-                <p class="leading-relaxed bg-gray-100 p-3 rounded-lg">
-                    <span class="block font-bold text-gray-700">You </span>
+                <p class="leading-relaxed bg-black p-3 rounded-lg">
+                    <span class="block font-bold text-white">You </span>
                     {message.content}
                 </p>
             </div>
             {:else}
-                    <div class="flex flex-row-reverse gap-3 my-4 text-gray-600 text-sm ml-auto max-w-[80%]">
+                    <div class="flex flex-row-reverse gap-3 my-4 text-[#CCFF00] text-sm ml-auto max-w-[80%]">
                         <span class="relative flex shrink-0 overflow-hidden rounded-full w-8 h-8">
                             {#if message.status === 'thinking'}
                                 <!-- Spinner -->
-                                <div class="rounded-full bg-gray-100 border p-1">
-                                    <svg class="animate-spin size-5 text-gray-600" viewBox="0 0 24 24">
+                                <div class="rounded-full bg-[#202020] border  p-1">
+                                    <svg class="animate-spin size-5 text-[#CCFF00]" viewBox="0 0 24 24">
                                         <path fill="currentColor" d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12,20Z" opacity="0.25"/>
                                         <path fill="currentColor" d="M12,4a8,8,0,0,1,7.89,6.7A1.53,1.53,0,0,0,21.38,12h0a1.5,1.5,0,0,0,1.48-1.75,11,11,0,0,0-21.72,0A1.5,1.5,0,0,0,2.62,12h0a1.53,1.53,0,0,0,1.49-1.3A8,8,0,0,1,12,4Z"/>
                                     </svg>
                                 </div>
                             {:else}
                                 <!-- AI Icon -->
-                                <div class="rounded-full bg-gray-100 border p-1">
-                                    <svg fill="black" viewBox="0 0 24 24" height="20" width="20">
+                                <div class="rounded-full bg-[#202020] border border-[#202020] p-1">
+                                    <!-- <svg fill="black" viewBox="0 0 24 24" height="20" width="20">
                                         <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
-                                    </svg>
+                                    </svg> -->
+                                    <img src="https://nextdawnai.cloud/assets/logo2.bmp" >
                                 </div>
                             {/if}
                         </span>
                 
-                <div class="leading-relaxed bg-blue-50 p-3 rounded-lg shadow-sm ml-2 w-full">
-                    <span class="block font-bold text-gray-700 text-right">AI </span>
+                <div class="leading-relaxed bg-black p-3 rounded-lg shadow-sm ml-2 w-full">
+                    <span class="block font-bold text-white text-right">Nixi </span>
                     {#if message.status === 'thinking'}
-                        <div class="text-gray-500 italic">
+                        <div class="text-[#CCFF00] italic">
                             {message.content}
                         </div>
                     {:else}
@@ -272,9 +288,9 @@
             >
             <button 
             type="submit"
-            class="inline-flex items-center justify-center rounded-md text-sm font-medium text-white bg-black hover:bg-[#111827E6] h-10 px-4 py-2"
+            class="inline-flex items-center justify-center rounded-md text-sm font-medium text-[#CCFF00] bg-[#202020] hover:bg-gray-800 h-10 px-4 py-2"
             >
-            <svg class="w-5 h-5 mr-2" fill="white" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <svg class="w-5 h-5 mr-2" fill="#CCFF00" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"></path>
             </svg>
             Send
