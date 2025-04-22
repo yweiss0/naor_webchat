@@ -568,33 +568,13 @@ async def is_stock_price_query(
             },
         ]
 
-        start_time = datetime.now()
-        if langfuse_client and span:
-            # Use Langfuse-instrumented OpenAI client if available
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=classification_messages,
-                temperature=0.0,
-                response_format={"type": "json_object"},
-            )
-
-            # Capture the generation with Langfuse
-            span.generation(
-                name="stock_price_query_classification",
-                model="gpt-4o-mini",
-                input=classification_messages,
-                output=response.choices[0].message if response.choices else None,
-                start_time=start_time,
-                end_time=datetime.now(),
-            )
-        else:
-            # Use regular OpenAI client
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=classification_messages,
-                temperature=0.0,
-                response_format={"type": "json_object"},
-            )
+        # Use regular OpenAI client without tracing the generation
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=classification_messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
 
         # Parse the response content
         if (
@@ -732,29 +712,11 @@ async def handle_stock_price_query(
     ]
 
     try:
-        start_time = datetime.now()
-        if langfuse_client and span:
-            # Use Langfuse-instrumented OpenAI client if available
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-            )
-
-            # Capture the generation with Langfuse
-            span.generation(
-                name="format_stock_price_response",
-                model="gpt-4o-mini",
-                input=messages,
-                output=response.choices[0].message if response.choices else None,
-                start_time=start_time,
-                end_time=datetime.now(),
-            )
-        else:
-            # Use regular OpenAI client
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-            )
+        # Use regular OpenAI client without tracing the generation
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+        )
 
         final_content = response.choices[0].message.content
 
