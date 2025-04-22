@@ -137,6 +137,21 @@ async def is_related_to_stocks_crypto(
         print("OpenAI client not available for stock/crypto classification.")
         return False
 
+    # Quick check for common commodities (especially gold)
+    query_lower = query.lower()
+    if any(
+        gold_term in query_lower
+        for gold_term in ["gold", "xau", "xauusd", "xau/usd", "gold price"]
+    ):
+        print("Query contains gold-related terms, automatically classifying as related")
+        if langfuse_client and parent_span:
+            span = parent_span.span(
+                name="classify_stocks_crypto",
+                input={"query": query},
+            )
+            span.end(output={"is_related": True, "reason": "gold_keyword"})
+        return True
+
     print(f"Classifying if query is related to stocks/crypto: '{query}'")
 
     # Create a span for this operation if Langfuse is available
@@ -151,13 +166,14 @@ async def is_related_to_stocks_crypto(
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Is it related to stocks, cryptocurrency, trading, investing, or financial markets?
+                "content": """Analyze the user query. Is it related to stocks, cryptocurrency, trading, investing, financial markets, or commodities (like gold and silver)?
                 
                 Consider semantic similarity and not just exact matches. For example:
                 - Questions about technical indicators (RSI, MACD, etc.) are related
                 - Questions about market analysis, charts, or trading strategies are related
                 - Questions about financial instruments, brokers, or trading platforms are related
                 - Questions about economic indicators that affect markets are related
+                - Questions about commodity prices, especially gold and silver, are related
                 
                 If yes, respond with 'True'.
                 If no, respond with 'False'.
@@ -166,7 +182,7 @@ async def is_related_to_stocks_crypto(
             },
             {
                 "role": "user",
-                "content": f'User Query: "{query}"\n\nIs this query related to stocks, cryptocurrency, or trading (True/False):',
+                "content": f'User Query: "{query}"\n\nIs this query related to stocks, cryptocurrency, commodities, or trading (True/False):',
             },
         ]
 
@@ -559,6 +575,21 @@ async def is_stock_price_query(
     Determines if the query is specifically about current stock price and extracts the ticker.
     Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
     """
+    # Quick check for gold-related terms
+    query_lower = user_query.lower()
+    if any(
+        gold_term in query_lower
+        for gold_term in [
+            "gold price",
+            "price of gold",
+            "gold cost",
+            "xauusd",
+            "xau/usd",
+        ]
+    ):
+        print("Direct gold price query detected, automatically classifying")
+        return (True, "GOLD", False)
+
     if not client:
         print("OpenAI client not available for stock price query classification.")
         return (False, "", False)
@@ -591,6 +622,8 @@ async def is_stock_price_query(
                 Common ticker symbols:
                 - Market indices: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (NASDAQ), ^RUT (Russell 2000), ^VIX (VIX), ^FTSE (FTSE 100), ^GDAXI (DAX), ^N225 (Nikkei 225)
                 - Commodities: GC=F (Gold), SI=F (Silver), CL=F (Crude Oil), NG=F (Natural Gas)
+                  - For gold specifically, use "GOLD" if user mentions gold, XAU/USD, or XAUUSD
+                  - For silver specifically, use "SILVER" if user mentions silver, XAG/USD, or XAGUSD
                 - Currencies: EURUSD=X (EUR/USD), GBPUSD=X (GBP/USD), USDJPY=X (USD/JPY)
                 - Treasury Yields: ^TNX (10-Year), ^FVX (5-Year), ^TYX (30-Year)
                 - Cryptocurrencies: BTC-USD, ETH-USD, etc.
@@ -777,6 +810,12 @@ async def handle_stock_price_query(
     parent_span=None,
 ) -> str:
     """Handles direct stock price queries using Yahoo Finance."""
+    # Normalize the ticker symbol first (especially for gold)
+    normalized_ticker = normalize_ticker(ticker, user_query)
+    if normalized_ticker != ticker:
+        print(f"Normalized ticker from {ticker} to {normalized_ticker}")
+        ticker = normalized_ticker
+
     print(
         f"Handling direct stock price query for ticker: {ticker}, needs_market_context: {needs_market_context}"
     )
@@ -788,6 +827,9 @@ async def handle_stock_price_query(
             name="handle_stock_price_query",
             input={
                 "ticker": ticker,
+                "original_ticker": (
+                    ticker if normalized_ticker == ticker else normalized_ticker
+                ),
                 "query": user_query,
                 "needs_market_context": needs_market_context,
             },
@@ -820,7 +862,12 @@ async def handle_stock_price_query(
     if ticker.startswith("^"):
         instrument_type = "market index"
     elif ticker.endswith("=F"):
-        instrument_type = "commodity"
+        if ticker == "GC=F":
+            instrument_type = "gold"
+        elif ticker == "SI=F":
+            instrument_type = "silver"
+        else:
+            instrument_type = "commodity"
     elif ticker.endswith("=X"):
         instrument_type = "forex pair"
     elif ticker.endswith("-USD"):
@@ -837,7 +884,13 @@ async def handle_stock_price_query(
 
     # Prepare the user message with price and historical data
     date_context = f" on {query_date}" if query_date else ""
-    user_message_content = f"Original query: {user_query}\n\nFinancial data: The price for {ticker}{date_context} is: {price}"
+
+    # For gold specifically, make sure to clarify this is gold price
+    display_name = (
+        "Gold" if ticker == "GC=F" and "gold" in user_query.lower() else ticker
+    )
+
+    user_message_content = f"Original query: {user_query}\n\nFinancial data: The price for {display_name}{date_context} is: {price}"
 
     if historical_data:
         user_message_content += f"\n\nHistorical data (last 5 days):\n"
@@ -873,12 +926,12 @@ async def handle_stock_price_query(
             span.end(
                 output={
                     "error": str(e),
-                    "fallback_response": f"The price for {ticker}{date_context} is: {price}",
+                    "fallback_response": f"The price for {display_name}{date_context} is: {price}",
                 },
                 status="error",
             )
 
-        return f"The price for {ticker}{date_context} is: {price}"
+        return f"The price for {display_name}{date_context} is: {price}"
 
 
 # --- OpenAI Tool Definitions --- (Keep as they are)
@@ -1765,3 +1818,22 @@ async def health_check(request: Request):
 # if __name__ == "__main__":
 #     import uvicorn
 #     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=4, lifespan="on")
+
+
+# --- Normalize ticker symbols ---
+def normalize_ticker(ticker: str, query: str) -> str:
+    """
+    Normalizes ticker symbols, especially for ambiguous cases like gold.
+    """
+    query_lower = query.lower()
+    ticker_upper = ticker.upper()
+
+    # Handle gold-related queries
+    if ticker_upper in ["GOLD", "XAU", "XAUUSD", "XAU/USD", "GLD"] or any(
+        gold_term in query_lower for gold_term in ["gold", "xau", "gold price"]
+    ):
+        print("Normalizing gold-related ticker to GC=F")
+        return "GC=F"  # Yahoo Finance ticker for gold futures
+
+    # Return the ticker as is in other cases
+    return ticker_upper
