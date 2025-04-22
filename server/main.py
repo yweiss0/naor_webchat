@@ -1623,71 +1623,49 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 await is_stock_price_query(user_query, client, langfuse_client, trace)
             )
 
-            if is_price_query and ticker:
-                print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
-                raw_ai_response = await handle_stock_price_query(
-                    ticker,
-                    user_query,
-                    client,
-                    needs_market_context,
-                    langfuse_client,
-                    trace,
-                )
-                final_response_content = process_text(raw_ai_response)
+            # Check if we're dealing with a historical date query first
+            search_needed, is_historical_date_query, date_string = (
+                await needs_web_search(user_query, client, langfuse_client, trace)
+            )
+
+            # If we identified a historical date in web search function, set the historical flag
+            if is_historical_date_query and not is_historical_query:
+                is_historical_query = True
                 print(
-                    f"DEBUG: Returning formatted stock price response: {final_response_content}"
+                    "DEBUG: Setting historical query flag based on detected date pattern"
                 )
 
-                if trace:
-                    trace.event(
-                        name="stock_price_response",
-                        output={
-                            "ticker": ticker,
-                            "market_context_needed": needs_market_context,
-                        },
-                    )
-            else:
-                # Continue with the original flow - check if web search is needed
-                search_needed, is_historical_date_query, date_string = (
-                    await needs_web_search(user_query, client, langfuse_client, trace)
+            # If we have a historical price query but web search wasn't triggered,
+            # force it to be true since we definitely need web search for historical data
+            if is_historical_query and not search_needed:
+                print("DEBUG: Forcing web search for historical price query")
+                search_needed = True
+
+            # Define system prompt and base messages
+            system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
+
+            base_messages = [
+                {"role": "system", "content": system_prompt}
+            ] + loaded_history
+
+            llm_call_span = None
+            if trace:
+                llm_call_span = trace.span(
+                    name="main_llm_call",
+                    input={
+                        "search_needed": search_needed,
+                        "is_historical_date_query": is_historical_date_query,
+                    },
                 )
 
-                # If we identified a historical date in web search function, set the historical flag
-                if is_historical_date_query and not is_historical_query:
-                    is_historical_query = True
-                    print(
-                        "DEBUG: Setting historical query flag based on detected date pattern"
-                    )
-
-                # If we have a historical price query but web search wasn't triggered,
-                # force it to be true since we definitely need web search for historical data
-                if is_historical_query and not search_needed:
-                    print("DEBUG: Forcing web search for historical price query")
-                    search_needed = True
-
-                system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
-
-                base_messages = [
-                    {"role": "system", "content": system_prompt}
-                ] + loaded_history
-
-                llm_call_span = None
-                if trace:
-                    llm_call_span = trace.span(
-                        name="main_llm_call",
-                        input={
-                            "search_needed": search_needed,
-                            "is_historical_date_query": is_historical_date_query,
-                        },
-                    )
-
-                # Check if we're dealing with a historical stock price query
-                historical_query_with_ticker = False
+            # Process historical queries with priority - even if it was detected as a direct price query
+            if is_historical_query or is_historical_date_query:
+                print(
+                    f"DEBUG: Detected historical query, handling via specialized historical price path"
+                )
 
                 # If we have a historical date but no ticker yet, try to extract ticker from the query
-                if (is_historical_date_query or is_historical_query) and not (
-                    is_price_query and ticker
-                ):
+                if not ticker:
                     print(
                         f"DEBUG: Historical query detected but no ticker identified yet, trying to extract from query"
                     )
@@ -1729,20 +1707,15 @@ Only respond with a JSON object like: {"ticker": "AAPL"} or {"ticker": ""} if no
                         if extracted_ticker:
                             ticker = extracted_ticker
                             is_price_query = True
-                            historical_query_with_ticker = True
                             print(
-                                f"DEBUG: Extracted ticker {ticker} from historical date query"
+                                f"DEBUG: Extracted ticker {ticker} from historical query"
                             )
                     except Exception as e:
                         print(f"DEBUG: Error extracting ticker from query: {e}")
 
-                if (
-                    (is_historical_date_query or is_historical_query)
-                    and ticker
-                    and (is_price_query or historical_query_with_ticker)
-                ):
+                if ticker:
                     print(
-                        f"DEBUG: Historical date price query detected for ticker {ticker} on date {date_string}"
+                        f"DEBUG: Historical price query detected for ticker {ticker} on date {date_string if date_string else 'unspecified historical date'}"
                     )
 
                     historical_price_span = None
@@ -1858,127 +1831,140 @@ Make sure to address the user's original query: "{user_query}"
                                 "price_result": price_result,
                             },
                         )
-                elif search_needed:
-                    print("DEBUG: Web search determined NEEDED.")
-                    search_span = None
-                    if trace:
-                        search_span = trace.span(name="web_search")
-
-                    # For historical queries, include the date in the search
-                    search_query = user_query
-                    if is_historical_date_query:
-                        search_query = f"{user_query} historical data"
-
-                    search_result_text = duckduckgo_search(
-                        f"{search_query} price in USD on {datetime.now():%B %d, %Y}",
-                        include_date=is_historical_date_query,
-                    )
-
-                    if search_span:
-                        search_span.end(
-                            output={"results_length": len(search_result_text)}
-                        )
-
-                    contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
-                    contextual_user_message_dict = {
-                        "role": "user",
-                        "content": contextual_prompt_content,
-                    }
-                    messages_sent_to_openai = base_messages + [
-                        contextual_user_message_dict
-                    ]
-                    print("DEBUG: Making LLM call with History + Search Results...")
-
-                    if trace:
-                        trace.event(
-                            name="web_search_used",
-                            output={
-                                "search_query": search_query,
-                                "is_historical": is_historical_date_query,
-                            },
-                        )
-                else:
-                    print("DEBUG: Web search determined NOT needed.")
-                    messages_sent_to_openai = base_messages + [
-                        current_user_message_dict
-                    ]
-                    print("DEBUG: Making LLM call with History + Current Query...")
-
+            elif is_price_query and ticker:
+                print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
+                raw_ai_response = await handle_stock_price_query(
+                    ticker,
+                    user_query,
+                    client,
+                    needs_market_context,
+                    langfuse_client,
+                    trace,
+                )
+                final_response_content = process_text(raw_ai_response)
                 print(
-                    f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+                    f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
-                if messages_sent_to_openai:
-                    print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
-                    if len(messages_sent_to_openai) > 1:
-                        print(
-                            f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
-                        )
 
-                generation_start_time = datetime.now()
-                openai_response = client.chat.completions.create(
+                if trace:
+                    trace.event(
+                        name="stock_price_response",
+                        output={
+                            "ticker": ticker,
+                            "market_context_needed": needs_market_context,
+                        },
+                    )
+            elif search_needed:
+                print("DEBUG: Web search determined NEEDED.")
+                search_span = None
+                if trace:
+                    search_span = trace.span(name="web_search")
+
+                # For historical queries, include the date in the search
+                search_query = user_query
+                if is_historical_date_query:
+                    search_query = f"{user_query} historical data"
+
+                search_result_text = duckduckgo_search(
+                    f"{search_query} price in USD on {datetime.now():%B %d, %Y}",
+                    include_date=is_historical_date_query,
+                )
+
+                if search_span:
+                    search_span.end(output={"results_length": len(search_result_text)})
+
+                contextual_prompt_content = f'Based on our previous conversation history AND the following recent web search results, please answer the user\'s latest query: "{user_query}"\n\nWeb Search Results:\n---\n{search_result_text}\n---\n\nYour concise answer:'
+                contextual_user_message_dict = {
+                    "role": "user",
+                    "content": contextual_prompt_content,
+                }
+                messages_sent_to_openai = base_messages + [contextual_user_message_dict]
+                print("DEBUG: Making LLM call with History + Search Results...")
+
+                if trace:
+                    trace.event(
+                        name="web_search_used",
+                        output={
+                            "search_query": search_query,
+                            "is_historical": is_historical_date_query,
+                        },
+                    )
+            else:
+                print("DEBUG: Web search determined NOT needed.")
+                messages_sent_to_openai = base_messages + [current_user_message_dict]
+                print("DEBUG: Making LLM call with History + Current Query...")
+
+            print(
+                f"DEBUG: TOTAL messages being sent to OpenAI: {len(messages_sent_to_openai)}"
+            )
+            if messages_sent_to_openai:
+                print(f"DEBUG: First message sent: {messages_sent_to_openai[0]}")
+                if len(messages_sent_to_openai) > 1:
+                    print(f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}")
+
+            generation_start_time = datetime.now()
+            openai_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages_sent_to_openai,
+                tools=available_tools,
+                tool_choice="auto",
+            )
+
+            if llm_call_span and trace:
+                llm_call_span.generation(
+                    name="openai_completion",
                     model="gpt-4o-mini",
-                    messages=messages_sent_to_openai,
-                    tools=available_tools,
-                    tool_choice="auto",
+                    input=messages_sent_to_openai,
+                    output=(
+                        openai_response.choices[0].message
+                        if openai_response.choices
+                        else None
+                    ),
+                    start_time=generation_start_time,
+                    end_time=datetime.now(),
                 )
 
-                if llm_call_span and trace:
-                    llm_call_span.generation(
-                        name="openai_completion",
-                        model="gpt-4o-mini",
-                        input=messages_sent_to_openai,
-                        output=(
-                            openai_response.choices[0].message
-                            if openai_response.choices
-                            else None
-                        ),
-                        start_time=generation_start_time,
-                        end_time=datetime.now(),
+            response_message = openai_response.choices[0].message
+            if response_message.tool_calls:
+                print(f"DEBUG: Tool call(s) requested...")
+                tool_call_span = None
+                if trace:
+                    tool_call_span = trace.span(name="tool_calls_handling")
+
+                raw_ai_response = await handle_tool_calls(
+                    response_message,
+                    user_query,
+                    messages_sent_to_openai,
+                    client,
+                    langfuse_client,
+                    tool_call_span,
+                )
+
+                if tool_call_span:
+                    tool_call_span.end()
+
+            else:
+                raw_ai_response = response_message.content
+                print(
+                    f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
+                )
+
+            if llm_call_span:
+                llm_call_span.end()
+
+            if not raw_ai_response:
+                print("DEBUG: ERROR - No final content generated.")
+                final_response_content = "I encountered an issue."
+                raw_ai_response = None
+
+                if trace:
+                    trace.update(
+                        status="error",
+                        error={"message": "No final content generated"},
                     )
-
-                response_message = openai_response.choices[0].message
-                if response_message.tool_calls:
-                    print(f"DEBUG: Tool call(s) requested...")
-                    tool_call_span = None
-                    if trace:
-                        tool_call_span = trace.span(name="tool_calls_handling")
-
-                    raw_ai_response = await handle_tool_calls(
-                        response_message,
-                        user_query,
-                        messages_sent_to_openai,
-                        client,
-                        langfuse_client,
-                        tool_call_span,
-                    )
-
-                    if tool_call_span:
-                        tool_call_span.end()
-
-                else:
-                    raw_ai_response = response_message.content
-                    print(
-                        f"DEBUG: Direct text response received snippet: {raw_ai_response[:50] if raw_ai_response else 'None'}..."
-                    )
-
-                if llm_call_span:
-                    llm_call_span.end()
-
-                if not raw_ai_response:
-                    print("DEBUG: ERROR - No final content generated.")
-                    final_response_content = "I encountered an issue."
-                    raw_ai_response = None
-
-                    if trace:
-                        trace.update(
-                            status="error",
-                            error={"message": "No final content generated"},
-                        )
-                else:
-                    final_response_content = process_text(raw_ai_response)
-                    print(
-                        f"DEBUG: Returning formatted response: {final_response_content}"
-                    )
+            else:
+                final_response_content = process_text(raw_ai_response)
+                print(f"DEBUG: Returning formatted response: {final_response_content}")
 
     # Error Handling
     except BadRequestError as bre:
@@ -2003,83 +1989,32 @@ Make sure to address the user's original query: "{user_query}"
         if trace:
             trace.update(
                 status="error",
-                error={"message": http_exc.detail, "status_code": http_exc.status_code},
+                error={"message": f"HTTP Exception: {str(http_exc)}"},
             )
 
         raise http_exc
     except Exception as e:
-        print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
-        traceback.print_exc()
+        print(f"DEBUG: ERROR - Unhandled Exception: {str(e)}")
         raw_ai_response = None
 
         if trace:
             trace.update(
                 status="error",
-                error={"message": "Internal server error", "details": str(e)},
+                error={"message": f"Unhandled Exception: {str(e)}"},
             )
 
-        raise HTTPException(status_code=500, detail="Internal server error.")
-
-    # --- Save History ---
-    if redis_conn and session_id and raw_ai_response:
-        try:
-            history_save_span = None
-            if trace:
-                history_save_span = trace.span(name="save_history")
-
-            new_history_entry = [
-                current_user_message_dict,
-                {"role": "assistant", "content": raw_ai_response},
-            ]
-            updated_history = loaded_history + new_history_entry
-            if len(updated_history) > MAX_HISTORY_MESSAGES:
-                updated_history = updated_history[-MAX_HISTORY_MESSAGES:]
-                print(f"DEBUG: History truncated to {len(updated_history)} messages.")
-
-            history_to_save_json = json.dumps(updated_history)
-            print(
-                f"DEBUG: Attempting to save history for session {session_id[-6:]}. Size: {len(updated_history)} messages."
-            )
-            await redis_conn.set(
-                session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
-            )
-            print(f"DEBUG: History save successful for session {session_id[-6:]}.")
-
-            if history_save_span:
-                history_save_span.end(output={"messages_saved": len(updated_history)})
-        except Exception as e:
-            print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
-
-            if trace:
-                error_event = trace.event(
-                    name="history_save_error", output={"error": str(e)}
-                )
-
-    # --- Set Cookie ---
-    if is_new_session and session_id and redis_conn:
-        print(
-            f"DEBUG: Setting CROSS-ORIGIN cookie for new session {session_id[-6:]}..."
-        )  # Updated log message
-        response.set_cookie(
-            key="chatbotSessionId",
-            value=session_id,
-            max_age=SESSION_TTL_SECONDS,
-            httponly=True,
-            samesite="None",  # MUST be 'None' for cross-origin
-            path="/",
-            secure=True,  # MUST be True when SameSite=None
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error: {str(e)}",
         )
-
-        if trace:
-            cookie_event = trace.event(
-                name="session_cookie_set", output={"session_id": session_id}
-            )
-
-    if trace:
-        trace.update(output={"response": final_response_content}, status="success")
-
-    print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
-    return {"response": final_response_content}
+    else:
+        # Return successful response when no exceptions occur
+        now = datetime.now().isoformat()
+        return {
+            "content": final_response_content,
+            "timestamp": now,
+            "raw_content": raw_ai_response,
+        }
 
 
 # --- Health Check Endpoint ---
