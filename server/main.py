@@ -14,10 +14,18 @@ import uuid
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 import traceback
+import time
+from langfuse import Langfuse
+from langfuse.decorators import langfuse_context, observe
 
 # --- Configuration & Initialization ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# --- Langfuse Configuration ---
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
 # --- Redis Configuration (Reads from .env) ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -46,7 +54,10 @@ class QueryRequest(BaseModel):
 async def lifespan(app: FastAPI):
     app.state.redis_conn = None
     app.state.openai_client = None
+    app.state.langfuse = None
     print("Lifespan: Initializing resources...")
+
+    # Initialize Redis
     try:
         redis_connection = redis.Redis.from_url(
             REDIS_URL, encoding="utf-8", decode_responses=True
@@ -57,6 +68,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Lifespan Startup Error: Could not connect to Redis: {e}")
         app.state.redis_conn = None
+
+    # Initialize OpenAI client
     if OPENAI_API_KEY:
         try:
             app.state.openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -66,11 +79,37 @@ async def lifespan(app: FastAPI):
             app.state.openai_client = None
     else:
         print("Lifespan Warning: OPENAI_API_KEY not found.")
+
+    # Initialize Langfuse client
+    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
+        try:
+            app.state.langfuse = Langfuse(
+                public_key=LANGFUSE_PUBLIC_KEY,
+                secret_key=LANGFUSE_SECRET_KEY,
+                host=LANGFUSE_HOST,
+            )
+            print("Lifespan: Langfuse client created.")
+        except Exception as e:
+            print(f"Lifespan Startup Error: Could not initialize Langfuse client: {e}")
+            app.state.langfuse = None
+    else:
+        print("Lifespan Warning: LANGFUSE_SECRET_KEY or LANGFUSE_PUBLIC_KEY not found.")
+
     yield
+
     print("Lifespan: Shutting down resources...")
     if hasattr(app.state, "redis_conn") and app.state.redis_conn:
         await app.state.redis_conn.close()
         print("Lifespan: Redis connection closed.")
+
+    # Close Langfuse client on shutdown
+    if hasattr(app.state, "langfuse") and app.state.langfuse:
+        try:
+            app.state.langfuse.flush()
+            print("Lifespan: Langfuse connection flushed.")
+        except Exception as e:
+            print(f"Lifespan Shutdown Error: Could not flush Langfuse connection: {e}")
+
     print("Lifespan: Shutdown complete.")
 
 
@@ -97,7 +136,9 @@ app.add_middleware(
 
 
 # --- Helper Functions --- (Keep as they are)
-async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool:
+async def is_related_to_stocks_crypto(
+    query: str, client: OpenAI | None, langfuse_client=None, trace_id=None
+) -> bool:
     """
     Determines if the query is related to stocks, cryptocurrency, or trading using OpenAI.
     Returns True if related, False otherwise.
@@ -107,6 +148,11 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         return False
 
     print(f"Classifying if query is related to stocks/crypto: '{query}'")
+
+    # Create a span for this LLM call if Langfuse is available
+    span = None
+    start_time = time.time()
+
     try:
         classification_messages = [
             {
@@ -130,12 +176,51 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
             },
         ]
 
+        # For tracking latency
+        llm_start_time = time.time()
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
             max_tokens=5,
             temperature=0.0,
         )
+
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            span = langfuse_client.span(
+                name="is_related_to_stocks_crypto",
+                trace_id=trace_id,
+                input={
+                    "query": query,
+                    "messages": classification_messages,
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 5,
+                    "temperature": 0.0,
+                },
+                output={
+                    "raw_response": (
+                        response.model_dump()
+                        if hasattr(response, "model_dump")
+                        else str(response)
+                    ),
+                    "content": (
+                        response.choices[0].message.content
+                        if (response.choices and response.choices[0].message)
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        response.usage.total_tokens if hasattr(response, "usage") else 0
+                    ),
+                },
+            )
 
         # Parse the response content
         if (
@@ -145,15 +230,40 @@ async def is_related_to_stocks_crypto(query: str, client: OpenAI | None) -> bool
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"Stock/crypto classification result: '{result_text}'")
-            return "true" in result_text
+            result = "true" in result_text
+
+            # Update span status if it exists
+            if span:
+                span.end(
+                    output={"classification_result": result, "result_text": result_text}
+                )
+
+            return result
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+
+            # Update span with error if it exists
+            if span:
+                span.end(
+                    output={
+                        "error": "Could not parse classification response",
+                        "classification_result": False,
+                    }
+                )
+
             return False
 
     except Exception as e:
         print(f"Error during stock/crypto classification: {e}")
+
+        # Update span with error if it exists
+        if span:
+            span.end(
+                output={"error": str(e), "classification_result": False}, level="error"
+            )
+
         return False
 
 
@@ -302,7 +412,9 @@ def load_qa_file() -> dict:
         return {}
 
 
-async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, str]:
+async def find_qa_match(
+    user_query: str, client: OpenAI | None, langfuse_client=None, trace_id=None
+) -> tuple[bool, str]:
     """
     Check if the user query matches a question in the Q&A file.
     Returns a tuple of (is_match, answer_or_empty_string)
@@ -318,6 +430,10 @@ async def find_qa_match(user_query: str, client: OpenAI | None) -> tuple[bool, s
         return (False, "")
 
     print(f"Checking if query matches Q&A file: '{user_query}'")
+
+    # Create a span for this LLM call if Langfuse is available
+    span = None
+
     try:
         # Create a prompt for the LLM to find the best match
         qa_text = "\n\n".join([f"Q: {q}\nA: {a}" for q, a in qa_dict.items()])
@@ -345,11 +461,50 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
             },
         ]
 
+        # For tracking latency
+        llm_start_time = time.time()
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
             temperature=0.0,
         )
+
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            span = langfuse_client.span(
+                name="find_qa_match",
+                trace_id=trace_id,
+                input={
+                    "user_query": user_query,
+                    "qa_pairs_count": len(qa_dict),
+                    "messages": classification_messages,
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.0,
+                },
+                output={
+                    "raw_response": (
+                        response.model_dump()
+                        if hasattr(response, "model_dump")
+                        else str(response)
+                    ),
+                    "content": (
+                        response.choices[0].message.content
+                        if (response.choices and response.choices[0].message)
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        response.usage.total_tokens if hasattr(response, "usage") else 0
+                    ),
+                },
+            )
 
         # Parse the response content
         if (
@@ -361,6 +516,11 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
 
             if result_text == "NO_MATCH":
                 print("No Q&A match found for the query.")
+
+                # Update span status if it exists
+                if span:
+                    span.end(output={"qa_match_found": False})
+
                 return (False, "")
             else:
                 # Remove "A: " prefix if it exists
@@ -368,21 +528,47 @@ If there's no match, respond with ONLY 'NO_MATCH'.""",
                     result_text = result_text[3:].strip()
 
                 print("Q&A match found for the query.")
+
+                # Update span status if it exists
+                if span:
+                    span.end(
+                        output={
+                            "qa_match_found": True,
+                            "answer_length": len(result_text),
+                        }
+                    )
+
                 return (True, result_text)
         else:
             print(
                 "Warning: Could not parse Q&A matching response. Defaulting to no match."
             )
+
+            # Update span with error if it exists
+            if span:
+                span.end(
+                    output={
+                        "error": "Could not parse Q&A matching response",
+                        "qa_match_found": False,
+                    },
+                    level="error",
+                )
+
             return (False, "")
 
     except Exception as e:
         print(f"Error during Q&A matching: {e}")
+
+        # Update span with error if it exists
+        if span:
+            span.end(output={"error": str(e), "qa_match_found": False}, level="error")
+
         return (False, "")
 
 
 # --- New Function: Check if query is about current stock price ---
 async def is_stock_price_query(
-    user_query: str, client: OpenAI | None
+    user_query: str, client: OpenAI | None, langfuse_client=None, trace_id=None
 ) -> tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
@@ -393,6 +579,10 @@ async def is_stock_price_query(
         return (False, "", False)
 
     print(f"Classifying if query is about current stock price: '{user_query}'")
+
+    # Create a span for this LLM call if Langfuse is available
+    span = None
+
     try:
         classification_messages = [
             {
@@ -423,12 +613,51 @@ async def is_stock_price_query(
             },
         ]
 
+        # For tracking latency
+        llm_start_time = time.time()
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
             temperature=0.0,
             response_format={"type": "json_object"},
         )
+
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            span = langfuse_client.span(
+                name="is_stock_price_query",
+                trace_id=trace_id,
+                input={
+                    "user_query": user_query,
+                    "messages": classification_messages,
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                },
+                output={
+                    "raw_response": (
+                        response.model_dump()
+                        if hasattr(response, "model_dump")
+                        else str(response)
+                    ),
+                    "content": (
+                        response.choices[0].message.content
+                        if (response.choices and response.choices[0].message)
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        response.usage.total_tokens if hasattr(response, "usage") else 0
+                    ),
+                },
+            )
 
         # Parse the response content
         if (
@@ -446,18 +675,69 @@ async def is_stock_price_query(
                 print(
                     f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
                 )
+
+                # Update span status if it exists
+                if span:
+                    span.end(
+                        output={
+                            "is_price_query": is_price_query,
+                            "ticker": ticker,
+                            "needs_market_context": needs_market_context,
+                            "parsed_json": result_json,
+                        }
+                    )
+
                 return (is_price_query, ticker, needs_market_context)
             except json.JSONDecodeError:
                 print(f"Warning: Could not parse JSON response: {result_text}")
+
+                # Update span with error if it exists
+                if span:
+                    span.end(
+                        output={
+                            "error": f"Could not parse JSON response: {result_text}",
+                            "is_price_query": False,
+                            "ticker": "",
+                            "needs_market_context": False,
+                        },
+                        level="error",
+                    )
+
                 return (False, "", False)
         else:
             print(
                 "Warning: Could not parse classification response. Defaulting to False."
             )
+
+            # Update span with error if it exists
+            if span:
+                span.end(
+                    output={
+                        "error": "Could not parse classification response",
+                        "is_price_query": False,
+                        "ticker": "",
+                        "needs_market_context": False,
+                    },
+                    level="error",
+                )
+
             return (False, "", False)
 
     except Exception as e:
         print(f"Error during stock price query classification: {e}")
+
+        # Update span with error if it exists
+        if span:
+            span.end(
+                output={
+                    "error": str(e),
+                    "is_price_query": False,
+                    "ticker": "",
+                    "needs_market_context": False,
+                },
+                level="error",
+            )
+
         return (False, "", False)
 
 
@@ -467,6 +747,8 @@ async def handle_stock_price_query(
     user_query: str,
     client: OpenAI | None,
     needs_market_context: bool = False,
+    langfuse_client=None,
+    trace_id=None,
 ) -> str:
     """Handles direct stock price queries using Yahoo Finance."""
     print(
@@ -515,16 +797,84 @@ async def handle_stock_price_query(
         {"role": "user", "content": user_message_content},
     ]
 
+    # Create a span for this LLM call if Langfuse is available
+    span = None
+
     try:
+        # For tracking latency
+        llm_start_time = time.time()
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
         )
 
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            span = langfuse_client.span(
+                name="handle_stock_price_query",
+                trace_id=trace_id,
+                input={
+                    "ticker": ticker,
+                    "user_query": user_query,
+                    "needs_market_context": needs_market_context,
+                    "messages": messages,
+                    "price_data": {
+                        "price": price,
+                        "has_historical_data": historical_data is not None,
+                        "instrument_type": instrument_type,
+                    },
+                    "model": "gpt-4o-mini",
+                },
+                output={
+                    "raw_response": (
+                        response.model_dump()
+                        if hasattr(response, "model_dump")
+                        else str(response)
+                    ),
+                    "content": (
+                        response.choices[0].message.content
+                        if (response.choices and response.choices[0].message)
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        response.usage.total_tokens if hasattr(response, "usage") else 0
+                    ),
+                },
+            )
+
         final_content = response.choices[0].message.content
+
+        # Update span status if it exists
+        if span:
+            span.end(
+                output={
+                    "response_length": len(final_content) if final_content else 0,
+                    "success": True,
+                }
+            )
+
         return final_content
     except Exception as e:
         print(f"Error formatting stock price response: {e}")
+
+        # Update span with error if it exists
+        if span:
+            span.end(
+                output={
+                    "error": str(e),
+                    "fallback_response": f"The latest price for {ticker} is: {price}",
+                },
+                level="error",
+            )
+
         return f"The latest price for {ticker} is: {price}"
 
 
@@ -565,7 +915,9 @@ available_tools = [stock_price_function, web_search_function]
 # --- Core Logic ---
 
 
-async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
+async def needs_web_search(
+    user_query: str, client: OpenAI | None, langfuse_client=None, trace_id=None
+) -> bool:
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
 
@@ -627,21 +979,27 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         "what's the condition",
         "what's the state",
         "what's the status",
-        "what's the situation",
-        "what's the outlook",
-        "what's the forecast",
-        "what's the prediction",
-        "what's the trend",
-        "what's the sentiment",
-        "what's the mood",
-        "what's the condition",
-        "what's the state",
-        "what's the status",
     ]
 
     # Check if any of the web search keywords are in the query
     if any(keyword in query_lower for keyword in web_search_keywords):
         print(f"DEBUG: Query contains web search keyword, triggering web search.")
+
+        # Log to Langfuse if available
+        if langfuse_client and trace_id:
+            langfuse_client.span(
+                name="needs_web_search",
+                trace_id=trace_id,
+                input={"user_query": user_query, "method": "keyword_match"},
+                output={
+                    "needs_web_search": True,
+                    "match_type": "keyword_match",
+                    "matched_keywords": [
+                        kw for kw in web_search_keywords if kw in query_lower
+                    ],
+                },
+            )
+
         return True
 
     recall_keywords = [
@@ -657,11 +1015,45 @@ async def needs_web_search(user_query: str, client: OpenAI | None) -> bool:
         key in query_lower for key in recall_keywords
     ):
         print("DEBUG: Query classified as recall, skipping web search.")
+
+        # Log to Langfuse if available
+        if langfuse_client and trace_id:
+            langfuse_client.span(
+                name="needs_web_search",
+                trace_id=trace_id,
+                input={"user_query": user_query, "method": "recall_keyword_match"},
+                output={
+                    "needs_web_search": False,
+                    "match_type": "recall_keyword_match",
+                    "matched_keywords": [
+                        kw for kw in recall_keywords if kw in query_lower
+                    ],
+                },
+            )
+
         return False
 
     if not client:
         print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
+
+        # Log to Langfuse if available
+        if langfuse_client and trace_id:
+            langfuse_client.span(
+                name="needs_web_search",
+                trace_id=trace_id,
+                input={"user_query": user_query, "method": "fallback_no_client"},
+                output={
+                    "needs_web_search": False,
+                    "error": "OpenAI client not available",
+                },
+                level="error",
+            )
+
         return False
+
+    # Create a span for this LLM call if Langfuse is available
+    span = None
+
     try:
         classification_messages = [
             {
@@ -686,12 +1078,54 @@ Do NOT say True if the user is asking about the conversation history or what was
                 "content": f'User Query: "{user_query}"\n\nRequires Web Search (True/False):',
             },
         ]
+
+        # For tracking latency
+        llm_start_time = time.time()
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=classification_messages,
             max_tokens=5,
             temperature=0.0,
         )
+
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            span = langfuse_client.span(
+                name="needs_web_search_llm",
+                trace_id=trace_id,
+                input={
+                    "user_query": user_query,
+                    "messages": classification_messages,
+                    "method": "llm_classification",
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 5,
+                    "temperature": 0.0,
+                },
+                output={
+                    "raw_response": (
+                        response.model_dump()
+                        if hasattr(response, "model_dump")
+                        else str(response)
+                    ),
+                    "content": (
+                        response.choices[0].message.content
+                        if (response.choices and response.choices[0].message)
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        response.usage.total_tokens if hasattr(response, "usage") else 0
+                    ),
+                },
+            )
+
         if (
             response.choices
             and response.choices[0].message
@@ -699,19 +1133,48 @@ Do NOT say True if the user is asking about the conversation history or what was
         ):
             result_text = response.choices[0].message.content.strip().lower()
             print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
-            return "true" in result_text
+            result = "true" in result_text
+
+            # Update span status if it exists
+            if span:
+                span.end(
+                    output={"needs_web_search": result, "result_text": result_text}
+                )
+
+            return result
         else:
             print(
                 "DEBUG: Could not parse classification response. Defaulting to False."
             )
+
+            # Update span with error if it exists
+            if span:
+                span.end(
+                    output={
+                        "error": "Could not parse classification response",
+                        "needs_web_search": False,
+                    },
+                    level="error",
+                )
+
             return False
     except Exception as e:
         print(f"DEBUG: Error during classification LLM call: {e}")
+
+        # Update span with error if it exists
+        if span:
+            span.end(output={"error": str(e), "needs_web_search": False}, level="error")
+
         return False
 
 
 async def handle_tool_calls(
-    response_message, user_query: str, messages_history: list, client: OpenAI | None
+    response_message,
+    user_query: str,
+    messages_history: list,
+    client: OpenAI | None,
+    langfuse_client=None,
+    trace_id=None,
 ) -> str:
     if not client:
         return "Error: OpenAI client not available."
@@ -722,16 +1185,51 @@ async def handle_tool_calls(
     print(f"DEBUG: Handling {len(tool_calls)} tool call(s)...")
     messages_for_follow_up = messages_history + [response_message]
 
+    # Create a span for the overall tool calls handling if Langfuse is available
+    tool_calls_span = None
+    if langfuse_client and trace_id:
+        tool_calls_span = langfuse_client.span(
+            name="handle_tool_calls",
+            trace_id=trace_id,
+            input={
+                "user_query": user_query,
+                "tool_calls_count": len(tool_calls),
+                "tool_calls": [
+                    {
+                        "function_name": tc.function.name,
+                        "function_args": tc.function.arguments,
+                    }
+                    for tc in tool_calls
+                ],
+            },
+        )
+
     for tool_call in tool_calls:
         function_name = tool_call.function.name
         function_args_str = tool_call.function.arguments
         tool_call_id = tool_call.id
         result_content = ""
+
+        # Create a span for this specific tool call if Langfuse is available
+        tool_span = None
+        if langfuse_client and trace_id:
+            tool_span = langfuse_client.span(
+                name=f"tool_call_{function_name}",
+                trace_id=trace_id,
+                input={
+                    "function_name": function_name,
+                    "arguments": function_args_str,
+                    "tool_call_id": tool_call_id,
+                },
+            )
+
         try:
             args_dict = json.loads(function_args_str)
+            start_time = time.time()
+
             if function_name == "get_stock_price":
                 ticker = args_dict.get("ticker")
-                price = get_stock_price(ticker)
+                price, _ = get_stock_price(ticker)
                 result_content = (
                     f"Price for {ticker}: {price}"
                     if ticker
@@ -748,12 +1246,30 @@ async def handle_tool_calls(
                 )
             else:
                 result_content = f"Error: Unknown function '{function_name}'."
+
+            end_time = time.time()
+            tool_latency = end_time - start_time
+
             print(
                 f"DEBUG: Tool '{function_name}' executed. Result snippet: {result_content[:50]}..."
             )
+
+            # Update tool span if it exists
+            if tool_span:
+                tool_span.end(
+                    output={"result": result_content, "success": True},
+                    metadata={"latency": tool_latency},
+                )
+
         except Exception as e:
             print(f"DEBUG: Error executing tool {function_name}: {e}")
             result_content = f"Error executing tool: {e}"
+
+            # Update tool span with error if it exists
+            if tool_span:
+                tool_span.end(
+                    output={"error": str(e), "result": result_content}, level="error"
+                )
 
         messages_for_follow_up.append(
             {
@@ -765,6 +1281,10 @@ async def handle_tool_calls(
         )
 
     print("DEBUG: Making follow-up LLM call with tool results...")
+
+    # Create a span for this LLM call if Langfuse is available
+    followup_span = None
+
     try:
         # Add a system message to emphasize the importance of current information
         follow_up_messages = [
@@ -774,24 +1294,101 @@ async def handle_tool_calls(
             }
         ] + messages_for_follow_up
 
+        # For tracking latency
+        llm_start_time = time.time()
+
         follow_up_response = client.chat.completions.create(
             model="gpt-4o-mini", messages=follow_up_messages
         )
+
+        # Calculate latency
+        llm_end_time = time.time()
+        latency = llm_end_time - llm_start_time
+
+        # Create a span if Langfuse client is available
+        if langfuse_client and trace_id:
+            followup_span = langfuse_client.span(
+                name="follow_up_llm_call",
+                trace_id=trace_id,
+                input={"messages": follow_up_messages, "model": "gpt-4o-mini"},
+                output={
+                    "raw_response": (
+                        follow_up_response.model_dump()
+                        if hasattr(follow_up_response, "model_dump")
+                        else str(follow_up_response)
+                    ),
+                    "content": (
+                        follow_up_response.choices[0].message.content
+                        if (
+                            follow_up_response.choices
+                            and follow_up_response.choices[0].message
+                        )
+                        else None
+                    ),
+                },
+                metadata={
+                    "latency": latency,
+                    "token_count": (
+                        follow_up_response.usage.total_tokens
+                        if hasattr(follow_up_response, "usage")
+                        else 0
+                    ),
+                },
+            )
+
         final_content = follow_up_response.choices[0].message.content
         print(
             f"DEBUG: Follow-up Response snippet: {final_content[:50] if final_content else 'None'}..."
         )
+
+        # Update tool_calls_span if it exists
+        if tool_calls_span:
+            tool_calls_span.end(
+                output={
+                    "tool_calls_executed": len(tool_calls),
+                    "final_content_length": len(final_content) if final_content else 0,
+                    "success": True,
+                }
+            )
+
+        # Update followup_span if it exists
+        if followup_span:
+            followup_span.end(
+                output={
+                    "response_length": len(final_content) if final_content else 0,
+                    "success": True,
+                }
+            )
+
         return final_content or "Error: No content in follow-up."
     except Exception as e:
         print(f"DEBUG: Error during follow-up LLM call: {e}")
+
+        # Update tool_calls_span with error if it exists
+        if tool_calls_span:
+            tool_calls_span.end(
+                output={
+                    "error": str(e),
+                    "tool_calls_executed": len(tool_calls),
+                    "success": False,
+                },
+                level="error",
+            )
+
+        # Update followup_span with error if it exists
+        if followup_span:
+            followup_span.end(output={"error": str(e), "success": False}, level="error")
+
         return f"Error summarizing tool results."
 
 
 # --- /api/chat Endpoint (Uses app.state) ---
 @app.post("/api/chat")
 async def chat(query: QueryRequest, request: Request, response: Response):
+    # Initialize key variables and clients
     redis_conn = request.app.state.redis_conn
     client = request.app.state.openai_client
+    langfuse_client = request.app.state.langfuse
 
     if not client:
         raise HTTPException(
@@ -800,10 +1397,27 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     if not redis_conn:
         print("DEBUG: WARNING - Redis connection is NOT available for this request!")
 
+    # Get client IP address for tracing
+    client_ip = request.client.host if request.client else "unknown"
+
     user_query = query.message
     session_id = request.cookies.get("chatbotSessionId")
     loaded_history = []
     is_new_session = False
+
+    # Start a new trace with Langfuse if available
+    trace = None
+    trace_id = str(uuid.uuid4())  # Generate a unique ID for this trace
+    if langfuse_client:
+        trace = langfuse_client.trace(
+            id=trace_id,
+            name="chat_request",
+            metadata={
+                "client_ip": client_ip,
+                "session_id": session_id[-6:] if session_id else "NEW",
+                "user_query": user_query,
+            },
+        )
 
     print(
         f"\n--- Request Start (Session: {session_id[-6:] if session_id else 'NEW'}) ---"
@@ -849,6 +1463,12 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         print(f"DEBUG: Generated NEW session ID: {session_id[-6:]}")
         loaded_history = []
 
+        # Update trace metadata with new session ID if available
+        if trace:
+            trace.update(
+                metadata={"session_id": session_id[-6:], "is_new_session": True}
+            )
+
     # Core Logic
     final_response_content = ""
     raw_ai_response = None
@@ -859,43 +1479,93 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     try:
         # First check if the query matches a question in the Q&A file
-        qa_match, qa_answer = await find_qa_match(user_query, client)
+        qa_match, qa_answer = await find_qa_match(
+            user_query, client, langfuse_client, trace_id
+        )
 
         if qa_match:
             print(f"DEBUG: Q&A match found, using predefined answer.")
             raw_ai_response = qa_answer
             final_response_content = process_text(raw_ai_response)
             print(f"DEBUG: Returning Q&A answer: {final_response_content}")
+
+            # Log Q&A match to Langfuse if available
+            if trace:
+                trace.event(
+                    name="qa_match_found",
+                    input={"query": user_query},
+                    output={"answer": qa_answer},
+                )
         else:
             # If no Q&A match, check if the query is related to stocks/crypto
-            if not await is_related_to_stocks_crypto(user_query, client):
+            if not await is_related_to_stocks_crypto(
+                user_query, client, langfuse_client, trace_id
+            ):
                 print("Query not related. Returning restricted response.")
+
+                # Log non-related query to Langfuse if available
+                if trace:
+                    trace.event(
+                        name="query_not_related",
+                        input={"query": user_query},
+                        output={
+                            "response": "I can only answer questions about stocks, cryptocurrency, or trading."
+                        },
+                    )
+
                 return {
                     "response": "I can only answer questions about stocks, cryptocurrency, or trading."
                 }
 
             # First check if this is a direct stock price query
             is_price_query, ticker, needs_market_context = await is_stock_price_query(
-                user_query, client
+                user_query, client, langfuse_client, trace_id
             )
 
             if is_price_query and ticker:
                 print(f"DEBUG: Direct stock price query detected for ticker: {ticker}")
                 raw_ai_response = await handle_stock_price_query(
-                    ticker, user_query, client, needs_market_context
+                    ticker,
+                    user_query,
+                    client,
+                    needs_market_context,
+                    langfuse_client,
+                    trace_id,
                 )
                 final_response_content = process_text(raw_ai_response)
                 print(
                     f"DEBUG: Returning formatted stock price response: {final_response_content}"
                 )
+
+                # Log stock price query to Langfuse if available
+                if trace:
+                    trace.event(
+                        name="stock_price_query_handled",
+                        input={
+                            "query": user_query,
+                            "ticker": ticker,
+                            "needs_market_context": needs_market_context,
+                        },
+                        output={"response": final_response_content},
+                    )
             else:
                 # Continue with the original flow - check if web search is needed
-                search_needed = await needs_web_search(user_query, client)
+                search_needed = await needs_web_search(
+                    user_query, client, langfuse_client, trace_id
+                )
                 system_prompt = "You are a financial assistant specializing in stocks, cryptocurrency, and trading. Use the conversation history provided. You must provide very clear and explicit answers in USD. If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. Ensure all prices are presented in USD. Refer back to previous turns in the conversation if the user asks."
 
                 base_messages = [
                     {"role": "system", "content": system_prompt}
                 ] + loaded_history
+
+                # Log web search decision to Langfuse if available
+                if trace:
+                    trace.event(
+                        name="web_search_decision",
+                        input={"query": user_query},
+                        output={"search_needed": search_needed},
+                    )
 
                 if search_needed:
                     print("DEBUG: Web search determined NEEDED.")
@@ -911,6 +1581,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         contextual_user_message_dict
                     ]
                     print("DEBUG: Making LLM call with History + Search Results...")
+
+                    # Log web search results to Langfuse if available
+                    if trace:
+                        trace.event(
+                            name="web_search_results",
+                            input={"query": user_query},
+                            output={"search_results": search_result_text},
+                        )
                 else:
                     print("DEBUG: Web search determined NOT needed.")
                     messages_sent_to_openai = base_messages + [
@@ -928,6 +1606,23 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                             f"DEBUG: Last message sent: {messages_sent_to_openai[-1]}"
                         )
 
+                # Create a span for this LLM call if Langfuse is available
+                main_llm_span = None
+                if langfuse_client and trace_id:
+                    main_llm_span = langfuse_client.span(
+                        name="main_llm_call",
+                        trace_id=trace_id,
+                        input={
+                            "messages": messages_sent_to_openai,
+                            "model": "gpt-4o-mini",
+                            "tools": available_tools,
+                            "tool_choice": "auto",
+                        },
+                    )
+
+                # For tracking latency
+                llm_start_time = time.time()
+
                 openai_response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=messages_sent_to_openai,
@@ -935,11 +1630,54 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     tool_choice="auto",
                 )
 
+                # Calculate latency
+                llm_end_time = time.time()
+                latency = llm_end_time - llm_start_time
+
+                # Update main_llm_span if it exists
+                if main_llm_span:
+                    main_llm_span.end(
+                        output={
+                            "raw_response": (
+                                openai_response.model_dump()
+                                if hasattr(openai_response, "model_dump")
+                                else str(openai_response)
+                            ),
+                            "has_tool_calls": (
+                                bool(openai_response.choices[0].message.tool_calls)
+                                if openai_response.choices
+                                and openai_response.choices[0].message
+                                else False
+                            ),
+                            "content": (
+                                openai_response.choices[0].message.content
+                                if (
+                                    openai_response.choices
+                                    and openai_response.choices[0].message
+                                )
+                                else None
+                            ),
+                        },
+                        metadata={
+                            "latency": latency,
+                            "token_count": (
+                                openai_response.usage.total_tokens
+                                if hasattr(openai_response, "usage")
+                                else 0
+                            ),
+                        },
+                    )
+
                 response_message = openai_response.choices[0].message
                 if response_message.tool_calls:
                     print(f"DEBUG: Tool call(s) requested...")
                     raw_ai_response = await handle_tool_calls(
-                        response_message, user_query, messages_sent_to_openai, client
+                        response_message,
+                        user_query,
+                        messages_sent_to_openai,
+                        client,
+                        langfuse_client,
+                        trace_id,
                     )
                 else:
                     raw_ai_response = response_message.content
@@ -951,6 +1689,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     print("DEBUG: ERROR - No final content generated.")
                     final_response_content = "I encountered an issue."
                     raw_ai_response = None
+
+                    # Log error to Langfuse if available
+                    if trace:
+                        trace.event(name="no_content_error", level="error")
                 else:
                     final_response_content = process_text(raw_ai_response)
                     print(
@@ -961,17 +1703,47 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     except BadRequestError as bre:
         print(f"DEBUG: ERROR - OpenAI Bad Request: {bre}")
         raw_ai_response = None
+
+        # Log error to Langfuse if available
+        if trace:
+            trace.event(
+                name="openai_bad_request_error",
+                input={"query": user_query},
+                output={"error": str(bre)},
+                level="error",
+            )
+
         raise HTTPException(
             status_code=400,
             detail=f"API Error: {bre.body.get('message', 'Bad Request')}",
         )
     except HTTPException as http_exc:
         raw_ai_response = None
+
+        # Log error to Langfuse if available
+        if trace:
+            trace.event(
+                name="http_exception",
+                input={"query": user_query},
+                output={"error": str(http_exc)},
+                level="error",
+            )
+
         raise http_exc
     except Exception as e:
         print(f"DEBUG: ERROR - Critical error in chat endpoint: {e}")
         traceback.print_exc()
         raw_ai_response = None
+
+        # Log error to Langfuse if available
+        if trace:
+            trace.event(
+                name="critical_error",
+                input={"query": user_query},
+                output={"error": str(e)},
+                level="error",
+            )
+
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # --- Save History ---
@@ -994,8 +1766,24 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 session_id, history_to_save_json, ex=SESSION_TTL_SECONDS
             )
             print(f"DEBUG: History save successful for session {session_id[-6:]}.")
+
+            # Log history update to Langfuse if available
+            if trace:
+                trace.event(
+                    name="history_saved",
+                    metadata={
+                        "session_id": session_id[-6:],
+                        "history_size": len(updated_history),
+                    },
+                )
         except Exception as e:
             print(f"DEBUG: ERROR - Redis SET failed: {e}. History not saved.")
+
+            # Log error to Langfuse if available
+            if trace:
+                trace.event(
+                    name="history_save_error", output={"error": str(e)}, level="error"
+                )
 
     # --- Set Cookie ---
     if is_new_session and session_id and redis_conn:
@@ -1012,6 +1800,36 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             secure=True,  # MUST be True when SameSite=None
         )
 
+        # Log cookie setting to Langfuse if available
+        if trace:
+            trace.event(
+                name="cookie_set",
+                metadata={
+                    "session_id": session_id[-6:],
+                    "max_age": SESSION_TTL_SECONDS,
+                },
+            )
+
+    # Complete the trace with final response if Langfuse is available
+    if trace:
+        trace.update(
+            output={
+                "final_response": final_response_content,
+                "response_length": (
+                    len(final_response_content) if final_response_content else 0
+                ),
+            },
+            metadata={
+                "history_size": len(loaded_history),
+                "session_id": session_id[-6:] if session_id else "NONE",
+            },
+        )
+        # Ensure all events are sent to Langfuse
+        try:
+            langfuse_client.flush()
+        except Exception as e:
+            print(f"DEBUG: ERROR - Langfuse flush failed: {e}")
+
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
     return {"response": final_response_content}
 
@@ -1021,8 +1839,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 async def health_check(request: Request):
     redis_conn_state = request.app.state.redis_conn
     openai_client_state = request.app.state.openai_client
+    langfuse_client_state = request.app.state.langfuse
     redis_status = "not_initialized"
     openai_status = "not_initialized"
+    langfuse_status = "not_initialized"
 
     if redis_conn_state:
         try:
@@ -1039,14 +1859,20 @@ async def health_check(request: Request):
     else:
         openai_status = "client_object_none_in_state"
 
+    if langfuse_client_state:
+        langfuse_status = "initialized"
+    else:
+        langfuse_status = "client_object_none_in_state"
+
     print(
-        f"Health Check: Redis Status = {redis_status}, OpenAI Status = {openai_status}"
+        f"Health Check: Redis Status = {redis_status}, OpenAI Status = {openai_status}, Langfuse Status = {langfuse_status}"
     )
     return {
         "status": "OK_V2_cross_origin",
         "redis_status": redis_status,
         "openai_status": openai_status,
-    }  # Changed status
+        "langfuse_status": langfuse_status,
+    }
 
 
 # --- Optional: To Run Directly ---
