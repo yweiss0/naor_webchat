@@ -577,7 +577,7 @@ async def is_stock_price_query(
         classification_messages = [
             {
                 "role": "system",
-                "content": """Analyze the user query. Is it specifically asking about the current or latest price of a stock, cryptocurrency, market index, commodity, or forex pair? 
+                "content": """Analyze the user query. Is it specifically asking about the current or historical price of a stock, cryptocurrency, market index, commodity, or forex pair? 
                 If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false}
                 If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false}
                 
@@ -672,6 +672,101 @@ async def is_stock_price_query(
         return (False, "", False)
 
 
+# --- Extract date from query ---
+def extract_date_from_query(query: str) -> str:
+    """
+    Extracts a date from the query if present.
+    Handles various formats including:
+    - Natural language: "April 22 2024"
+    - Relative dates: "yesterday", "last week", etc.
+    - DD.MM.YYYY: "01.05.2024", "1.5.2024"
+    - DD/MM/YYYY: "01/05/2024", "1/5/2024"
+    - DD.MM.YY: "01.05.24", "1.5.24"
+    - DD/MM/YY: "01/05/24", "1/5/24"
+
+    Returns an empty string if no date is found.
+    """
+    query_lower = query.lower()
+
+    # Check for relative date terms
+    if "yesterday" in query_lower:
+        return "yesterday"
+    if "last week" in query_lower:
+        return "last week"
+    if "last month" in query_lower:
+        return "last month"
+    if "last year" in query_lower:
+        return "last year"
+
+    # Check for common date patterns
+
+    # DD.MM.YYYY format (e.g., 01.05.2024 or 1.5.2024)
+    dot_full_year = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", query)
+    if dot_full_year:
+        day, month, year = dot_full_year.groups()
+        return f"{int(day):02d}.{int(month):02d}.{year}"
+
+    # DD/MM/YYYY format (e.g., 01/05/2024 or 1/5/2024)
+    slash_full_year = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", query)
+    if slash_full_year:
+        day, month, year = slash_full_year.groups()
+        return f"{int(day):02d}.{int(month):02d}.{year}"
+
+    # DD.MM.YY format (e.g., 01.05.24 or 1.5.24)
+    dot_short_year = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b", query)
+    if dot_short_year:
+        day, month, year = dot_short_year.groups()
+        full_year = (
+            f"20{year}" if int(year) < 50 else f"19{year}"
+        )  # Assume 20xx for years < 50
+        return f"{int(day):02d}.{int(month):02d}.{full_year}"
+
+    # DD/MM/YY format (e.g., 01/05/24 or 1/5/24)
+    slash_short_year = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{2})\b", query)
+    if slash_short_year:
+        day, month, year = slash_short_year.groups()
+        full_year = (
+            f"20{year}" if int(year) < 50 else f"19{year}"
+        )  # Assume 20xx for years < 50
+        return f"{int(day):02d}.{int(month):02d}.{full_year}"
+
+    # Month Day Year format (e.g. "April 22 2024" or "April 22nd, 2024")
+    months = [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ]
+    for month in months:
+        if month in query_lower:
+            # Look for month name followed by day and year
+            # Also account for ordinal suffixes like 1st, 2nd, 3rd, 4th
+            pattern = (
+                rf"\b{month}\s+(\d{{1,2}})(st|nd|rd|th)?\s*,?\s*(\d{{4}}|\d{{2}})\b"
+            )
+            match = re.search(pattern, query_lower)
+            if match:
+                day = match.group(1)
+                year = match.group(3)
+                month_num = months.index(month) + 1
+
+                # Handle 2-digit years
+                if len(year) == 2:
+                    year = f"20{year}" if int(year) < 50 else f"19{year}"
+
+                return f"{int(day):02d}.{month_num:02d}.{year}"
+
+    return ""
+
+
 # --- Handle direct stock price queries ---
 async def handle_stock_price_query(
     ticker: str,
@@ -698,15 +793,26 @@ async def handle_stock_price_query(
             },
         )
 
-    # Get price and historical data if market context is needed
+    # Extract date if present in the query
+    query_date = extract_date_from_query(user_query)
+    if query_date:
+        print(f"Extracted date from query: {query_date}")
+        if span:
+            span.event(name="date_extraction", output={"extracted_date": query_date})
+
+    # Get price and historical data
     price, historical_data = get_stock_price(
-        ticker, include_history=needs_market_context
+        ticker, date=query_date, include_history=needs_market_context
     )
 
     if span:
         span.event(
             name="stock_price_data",
-            output={"price": price, "has_historical_data": historical_data is not None},
+            output={
+                "price": price,
+                "has_historical_data": historical_data is not None,
+                "date_queried": query_date if query_date else "current",
+            },
         )
 
     # Determine the type of financial instrument
@@ -730,7 +836,8 @@ async def handle_stock_price_query(
     If the user is asking why prices changed, provide possible explanations based on the historical data and your knowledge of market factors."""
 
     # Prepare the user message with price and historical data
-    user_message_content = f"Original query: {user_query}\n\nFinancial data: The latest price for {ticker} is: {price}"
+    date_context = f" on {query_date}" if query_date else ""
+    user_message_content = f"Original query: {user_query}\n\nFinancial data: The price for {ticker}{date_context} is: {price}"
 
     if historical_data:
         user_message_content += f"\n\nHistorical data (last 5 days):\n"
@@ -766,12 +873,12 @@ async def handle_stock_price_query(
             span.end(
                 output={
                     "error": str(e),
-                    "fallback_response": f"The latest price for {ticker} is: {price}",
+                    "fallback_response": f"The price for {ticker}{date_context} is: {price}",
                 },
                 status="error",
             )
 
-        return f"The latest price for {ticker} is: {price}"
+        return f"The price for {ticker}{date_context} is: {price}"
 
 
 # --- OpenAI Tool Definitions --- (Keep as they are)
