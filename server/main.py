@@ -2011,7 +2011,7 @@ Make sure to address the user's original query: "{user_query}"
         # Return successful response when no exceptions occur
         now = datetime.now().isoformat()
         return {
-            "content": final_response_content,
+            "response": final_response_content,
             "timestamp": now,
             "raw_content": raw_ai_response,
         }
