@@ -304,7 +304,9 @@ async def needs_web_search(
         "today is",
         "today was",
         "today will be",
-        "good day",
+        "at the moment",
+        "at the moment",
+        "current status" "good day",
         "bad day",
         "market sentiment",
         "market mood",
@@ -403,6 +405,7 @@ IMPORTANT: If the user is asking about:
 - What's happening in the market today
 - Market outlook or forecasts
 - Recent market events or news
+- which stocks are the best at the moment to acquire?
 
 Then you MUST respond with 'True' as these questions require current information.
 
