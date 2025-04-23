@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Chat Widget</title>
+    <style>
+        /* Optional: Just add some basic body style for testing */
+        body {
+            font-family: sans-serif;
+            min-height: 200vh; /* Make page scrollable to test fixed positioning */
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+        h1 { color: #333; }
+    </style>
+    <!-- Load the ES Module version of your component -->
+    <!-- Adjust the path if your test.html is elsewhere relative to dist -->
+    <!-- <script type="module" src="./dist/swc.iife.js"></script> -->
+    <!-- <script type="module" src="./swc.iife.js"></script> -->
+    <script type="module" src="https://nextdawnai.cloud/swc.iife.js"></script>
+</head>
+<body>
+    <h1>Test Page for Chat Widget</h1>
+    <p>The chat widget should appear as a floating button in the bottom right.</p>
+    <p>Scrolling down...</p>
+
+    <!-- Use the custom element tag you defined -->
+    <swc-chatwidget></swc-chatwidget>
+
+    <!-- Optional: Load UMD version (alternative) -->
+    <!-- <script src="./dist/chat-widget.umd.js"></script> -->
+    <!-- <chat-widget></chat-widget> -->
+    <!-- Note: You usually only need one version (ES or UMD) -->
+
+</body>
+</html>

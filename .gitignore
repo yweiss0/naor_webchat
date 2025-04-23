@@ -6,6 +6,8 @@ client/.netlify
 client/.wrangler
 client/.svelte-kit
 client/build
+!client/static/dist/standalone
+!client/static/dist/standalone/**
 
 # OS
 .DS_Store
