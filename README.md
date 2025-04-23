@@ -1,204 +1,68 @@
-# naor_webchat
+# Naor Chatbot
 
-Svelte standalone web app for stock chatbot (use **Option B**).
+A comprehensive assistant chatbot with real-time stock market data and AI-powered responses.
 
+## Repository Structure
 
+This repository contains both frontend and backend components of the chatbot:
 
----
+- **`/client`**: Frontend web component built with Svelte
+- **`/server`**: Backend API built with FastAPI
 
-## How to Create a Svelte Standalone App (Option A)
-This optin uses  [Svelte Standalone](https://standalone.brenoliradev.com/).
-1. **Create a Svelte App**  
-   ```bash
-   npx sv create my-app   # you can add Tailwind
-   cd my-app
-   npm install
-   ```
+Each directory contains its own detailed README with specific setup and implementation instructions.
 
-2. **Clean up boilerplate**  
-   Remove the following files if they exist:  
-   - `src/components/Counter.svelte`  
-   - `src/assets/svelte.svg`  
-   - `src/routes/+page.svelte`  
+## Technology Stack
 
-3. **Install Svelte Standalone**  
-   ```bash
-   npm install -D svelte-standalone@latest
-   ```
+### Frontend (Web Component)
 
-4. **Generate a standalone component**  
-   ```bash
-   npx standalone create
-   ```  
-   - **Component name:** e.g. `payments`  
-   - **Embedding strategy:**  
-     - A. Explicit Call (Single Instance): `window.payments.start()`  
-     - B. Explicit Call (Multiple Instances): `window.payments.start()`  
-     - C. Auto‑Embed with Target ID  
-     - D. Auto‑Embed with Target Class  
-     - E. Auto‑Embed on Body  
+The frontend is implemented as a standalone web component that can be embedded in any website:
 
-5. **Configure your component**  
-   Navigate to `src/_standalone/<componentName>` (e.g. `payments`):  
-   - Create `embed.js` with:
-     ```js
-     import { autoEmbedWithTarget } from 'svelte-standalone';
-     import Example from './index.svelte'; // your embeddable component
-     autoEmbedWithTarget(Example, 'example');
-     ```
-   - `index.svelte` is where you write your Svelte code.  
-   - To use Tailwind, import your CSS in each component’s `<script>` block:
-     ```js
-     import '../../app.css';
-     ```
+- **Svelte**: Core framework for building the UI
+- **Vite**: Build system
+- **Tailwind CSS**: Styling
+- **Web Components**: Packaged as a custom element for seamless embedding
+- **IIFE Bundle**: Single JavaScript file that can be loaded with a script tag
 
-6. **Build the project**  
-   ```bash
-   npx standalone build --all
-   ```
+The web component approach allows for easy integration with various platforms, including WordPress and other content management systems, through Google Tag Manager or direct embedding.
 
-7. **Test the output**  
-   - After building, find `componentName.min.js` in `client/static/dist/standalone`.  
-   - In the same folder, create `index.html`:
-     ```html
-     <!DOCTYPE html>
-     <html>
-       <head>
-         <title>Floating Button Test</title>
-       </head>
-       <body>
-         <h1>Testing the Floating Button</h1>
-         <p>This is some content to test with.</p>
-         <script src="tryitnow.min.js"></script>
-         <floating-button></floating-button>
-       </body>
-     </html>
-     ```
-   - Serve it (for example, `http-server .`) and open `http://localhost:8080/index.html`.
+### Backend (API Server)
 
-8. **Embed in WordPress**  
-   - Add a **Custom HTML** block.  
-   - Insert:
-     ```html
-     <script src="http://localhost:8080/floating_button.min.js"></script>
-     ```  
-   - Verify it on your site.
+The backend provides intelligent responses and real-time financial data:
 
----
+- **FastAPI**: API framework for handling requests
+- **OpenAI**: GPT models for AI-powered responses
+- **Redis**: Session management and conversation history
+- **Yahoo Finance API**: Real-time stock and financial data
+- **DuckDuckGo Search**: Web search integration for current information
+- **Langfuse**: Monitoring and tracing of AI operations
 
-## Option B – Create a Web Component (**Recommended**)
+## Quick Start
 
-1. **Initialize a Vite + Svelte project** (NOT SvelteKit):  
-   ```bash
-   npm create vite my-web-component
-   ```  
-   Select **Svelte**.
+For detailed setup instructions, refer to the README files in the respective directories:
 
-2. **Install dependencies**  
-   ```bash
-   cd my-web-component
-   npm install
-   ```
+- [Frontend Setup](/client/README.md)
+- [Backend Setup](/server/README.md)
 
-3. **Set up Tailwind CSS (v3)**  
-   ```bash
-   npm install -D tailwindcss@3 postcss autoprefixer
-   npx tailwindcss init -p
-   ```  
-   - **`tailwind.config.js`**  
-     ```js
-     /** @type {import('tailwindcss').Config} */
-     export default {
-       content: ['./index.html', './src/**/*.{svelte,js,ts,jsx,tsx}'],
-       theme: { extend: {} },
-       plugins: []
-     };
-     ```
-   - **`app.css`**  
-     ```css
-     @tailwind base;
-     @tailwind components;
-     @tailwind utilities;
-     ```
+## Deployment
 
-4. **Configure Svelte as a custom element**  
-   - **`svelte.config.js`**  
-     ```js
-     import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+The application is designed for flexible deployment:
 
-     export default {
-       preprocess: vitePreprocess(),
-       compilerOptions: {
-         customElement: true
-       }
-     };
-     ```
+- Frontend web component can be hosted on any static file server or CDN
+- Backend requires a Python environment with Redis
+- Both components can be deployed independently
 
-5. **Configure Vite for library build**  
-   - **`vite.config.js`**  
-     ```js
-     import { defineConfig } from 'vite';
-     import { svelte } from '@sveltejs/vite-plugin-svelte';
+## Integration
 
-     export default defineConfig({
-       build: {
-         lib: {
-           name: 'svelteWebComponents',
-           entry: 'src/main.js',
-           formats: ['iife'],
-           fileName: 'swc'
-         }
-       },
-       plugins: [svelte()]
-     });
-     ```
+The chatbot can be integrated into any website by including the JavaScript bundle and inserting a custom HTML tag:
 
-6. **Create your component file**  
-   Place your Svelte file in `/lib` (e.g. `ChatWidget.svelte`).
+```html
+<script src="https://your-host.com/swc.iife.js"></script>
+<swc-chatwidget></swc-chatwidget>
+```
 
-7. **Declare the custom element**  
-   ```svelte
-   <svelte:options customElement="swc-chatwidget" />
-   ```
-   > Must include a hyphen (e.g. `swc-chatwidget`).
+For WordPress sites, Google Tag Manager integration is recommended for easier management.
 
-8. **Import Tailwind within the component**  
-   ```svelte
-   <style>
-     @import 'tailwindcss/base';
-     @import 'tailwindcss/components';
-     @import 'tailwindcss/utilities';
-   </style>
-   ```
-
-9. **Update the entry script**  
-   - **`src/main.js`**  
-     ```js
-     import './app.css';
-     import ChatWidget from './lib/ChatWidget.svelte';
-     ```
-
-10. **Build the library**  
-    ```bash
-    npm run build
-    ```
-
-11. **Retrieve the bundle**  
-    In `dist/`, keep only `swc.iife.js`.
-
-12. **Host the file**  
-    Upload `swc.iife.js` to your server or CDN.
-
-13. **Use the component**  
-    ```html
-    <script type="module" src="https://your-host.com/swc.iife.js"></script>
-    <swc-chatwidget></swc-chatwidget>
-    ```
-    > Ensure the tag name matches `<svelte:options customElement>`.
-
----
-
-## How to Implement with Google Tag Manager (GTM)
+# How to Implement with Google Tag Manager (GTM)
 
 1. Create a GTM account and connect via the GTM4WP plugin in WordPress.  
 2. Add a new **Custom HTML** tag and insert:
