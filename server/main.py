@@ -106,7 +106,8 @@ app = FastAPI(lifespan=lifespan)
 origins = [
     "http://localhost:5173",  # Local dev frontend
     "https://nextaisolutions.cloud",  # My tetsing FRONTEND
-    "https://trade.dev-worldcapital1.com",  # Naor allowed domain
+    "https://trade.dev-worldcapital1.com",  # Naor testing domain
+    "https://trade.nrdx.com",  # Naor production domain
     # Add other specific origins if necessary
 ]
 # Note: Avoid "*" with allow_credentials=True in production if possible
