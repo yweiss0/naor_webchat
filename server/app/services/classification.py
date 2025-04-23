@@ -1,0 +1,484 @@
+from openai import OpenAI
+from langfuse import Langfuse
+from datetime import datetime
+from typing import Tuple, Optional, Dict, Any, List, Union
+import json
+
+
+async def is_related_to_stocks_crypto(
+    query: str,
+    client: Optional[OpenAI],
+    langfuse_client: Optional[Langfuse] = None,
+    parent_span: Any = None,
+) -> bool:
+    """
+    Determines if the query is related to stocks, cryptocurrency, or trading using OpenAI.
+    Returns True if related, False otherwise.
+    """
+    if not client:
+        print("OpenAI client not available for stock/crypto classification.")
+        return False
+
+    # Quick check for common commodities (especially gold)
+    query_lower = query.lower()
+    if any(
+        gold_term in query_lower
+        for gold_term in ["gold", "xau", "xauusd", "xau/usd", "gold price"]
+    ):
+        print("Query contains gold-related terms, automatically classifying as related")
+        if langfuse_client and parent_span:
+            span = parent_span.span(
+                name="classify_stocks_crypto",
+                input={"query": query},
+            )
+            span.end(output={"is_related": True, "reason": "gold_keyword"})
+        return True
+
+    print(f"Classifying if query is related to stocks/crypto: '{query}'")
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="classify_stocks_crypto",
+            input={"query": query},
+        )
+
+    try:
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """Analyze the user query. Is it related to stocks, cryptocurrency, trading, investing, financial markets, or commodities (like gold and silver)?
+                
+                Consider semantic similarity and not just exact matches. For example:
+                - Questions about technical indicators (RSI, MACD, etc.) are related
+                - Questions about market analysis, charts, or trading strategies are related
+                - Questions about financial instruments, brokers, or trading platforms are related
+                - Questions about economic indicators that affect markets are related
+                - Questions about commodity prices, especially gold and silver, are related
+                
+                If yes, respond with 'True'.
+                If no, respond with 'False'.
+                
+                Answer only with 'True' or 'False'.""",
+            },
+            {
+                "role": "user",
+                "content": f'User Query: "{query}"\n\nIs this query related to stocks, cryptocurrency, commodities, or trading (True/False):',
+            },
+        ]
+
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="stock_crypto_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            # Use regular OpenAI client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+        # Parse the response content
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip().lower()
+            print(f"Stock/crypto classification result: '{result_text}'")
+            is_related = "true" in result_text
+
+            # Update the span with the result if available
+            if langfuse_client and span:
+                span.end(output={"is_related": is_related, "result_text": result_text})
+
+            return is_related
+        else:
+            print(
+                "Warning: Could not parse classification response. Defaulting to False."
+            )
+
+            # Update the span with the failure if available
+            if langfuse_client and span:
+                span.end(
+                    output={
+                        "error": "Could not parse classification response",
+                        "is_related": False,
+                    }
+                )
+
+            return False
+
+    except Exception as e:
+        print(f"Error during stock/crypto classification: {e}")
+
+        # Update the span with the error if available
+        if langfuse_client and span:
+            span.end(output={"error": str(e), "is_related": False}, status="error")
+
+        return False
+
+
+async def is_stock_price_query(
+    user_query: str,
+    client: Optional[OpenAI],
+    langfuse_client: Optional[Langfuse] = None,
+    parent_span: Any = None,
+) -> Tuple[bool, str, bool]:
+    """
+    Determines if the query is specifically about current stock price and extracts the ticker.
+    Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
+    """
+    # Quick check for gold-related terms
+    query_lower = user_query.lower()
+    if any(
+        gold_term in query_lower
+        for gold_term in [
+            "gold price",
+            "price of gold",
+            "gold cost",
+            "xauusd",
+            "xau/usd",
+        ]
+    ):
+        print("Direct gold price query detected, automatically classifying")
+        return (True, "GOLD", False)
+
+    if not client:
+        print("OpenAI client not available for stock price query classification.")
+        return (False, "", False)
+
+    print(f"Classifying if query is about current stock price: '{user_query}'")
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="is_stock_price_query",
+            input={"query": user_query},
+        )
+
+    try:
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """Analyze the user query. Is it specifically asking about the current or historical price of a stock, cryptocurrency, market index, commodity, or forex pair? 
+                If yes, respond with 'True' followed by the ticker symbol in JSON format like: {"is_price_query": true, "ticker": "AAPL", "needs_market_context": false}
+                If no, respond with 'False' in JSON format like: {"is_price_query": false, "ticker": "", "needs_market_context": false}
+                
+                Also determine if the query needs additional market context (like recent price movements, trends, or explanations for price changes).
+                Set "needs_market_context" to true if the query asks about:
+                - Price changes or movements (e.g., "did the S&P 500 decline this week?")
+                - Reasons for price changes (e.g., "why did Bitcoin drop?")
+                - Trends or patterns (e.g., "is gold trending up?")
+                - Comparisons (e.g., "how does AAPL compare to MSFT?")
+                
+                Common ticker symbols:
+                - Market indices: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (NASDAQ), ^RUT (Russell 2000), ^VIX (VIX), ^FTSE (FTSE 100), ^GDAXI (DAX), ^N225 (Nikkei 225)
+                - Commodities: GC=F (Gold), SI=F (Silver), CL=F (Crude Oil), NG=F (Natural Gas)
+                  - For gold specifically, use "GOLD" if user mentions gold, XAU/USD, or XAUUSD
+                  - For silver specifically, use "SILVER" if user mentions silver, XAG/USD, or XAGUSD
+                - Currencies: EURUSD=X (EUR/USD), GBPUSD=X (GBP/USD), USDJPY=X (USD/JPY)
+                - Treasury Yields: ^TNX (10-Year), ^FVX (5-Year), ^TYX (30-Year)
+                - Cryptocurrencies: BTC-USD, ETH-USD, etc.
+                
+                If the user mentions a market index, commodity, forex pair, or cryptocurrency by name, extract the appropriate ticker symbol.""",
+            },
+            {
+                "role": "user",
+                "content": f'User Query: "{user_query}"',
+            },
+        ]
+
+        # Use regular OpenAI client without tracing the generation
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=classification_messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+
+        # Parse the response content
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip()
+            try:
+                result_json = json.loads(result_text)
+                is_price_query = result_json.get("is_price_query", False)
+                ticker = result_json.get("ticker", "").strip().upper()
+                needs_market_context = result_json.get("needs_market_context", False)
+
+                print(
+                    f"Stock price query classification: is_price_query={is_price_query}, ticker={ticker}, needs_market_context={needs_market_context}"
+                )
+
+                if langfuse_client and span:
+                    span.end(
+                        output={
+                            "is_price_query": is_price_query,
+                            "ticker": ticker,
+                            "needs_market_context": needs_market_context,
+                        }
+                    )
+
+                return (is_price_query, ticker, needs_market_context)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not parse JSON response: {result_text}")
+
+                if langfuse_client and span:
+                    span.end(
+                        output={
+                            "error": f"Could not parse JSON response: {result_text}"
+                        },
+                        status="error",
+                    )
+
+                return (False, "", False)
+        else:
+            print(
+                "Warning: Could not parse classification response. Defaulting to False."
+            )
+
+            if langfuse_client and span:
+                span.end(
+                    output={"error": "Could not parse classification response"},
+                    status="error",
+                )
+
+            return (False, "", False)
+
+    except Exception as e:
+        print(f"Error during stock price query classification: {e}")
+
+        if langfuse_client and span:
+            span.end(output={"error": str(e)}, status="error")
+
+        return (False, "", False)
+
+
+async def needs_web_search(
+    user_query: str,
+    client: Optional[OpenAI],
+    langfuse_client: Optional[Langfuse] = None,
+    parent_span: Any = None,
+) -> bool:
+    """
+    Determines if the query requires web search for up-to-date information.
+    """
+    print(f"Classifying web search need for: '{user_query}'")
+    query_lower = user_query.lower()
+
+    # Create a span for this operation if Langfuse is available
+    span = None
+    if langfuse_client and parent_span:
+        span = parent_span.span(
+            name="needs_web_search",
+            input={"query": user_query},
+        )
+
+    # Check for specific keywords that should always trigger web search
+    web_search_keywords = [
+        "today",
+        "today's",
+        "today is",
+        "today was",
+        "today will be",
+        "good day",
+        "bad day",
+        "market sentiment",
+        "market mood",
+        "trading conditions",
+        "market outlook",
+        "market analysis",
+        "should i trade",
+        "should i buy",
+        "should i sell",
+        "is it a good time",
+        "is this a good time",
+        "is now a good time",
+        "what's happening",
+        "what is happening",
+        "what happened",
+        "latest news",
+        "recent news",
+        "breaking news",
+        "market update",
+        "market report",
+        "market summary",
+        "trading advice",
+        "investment advice",
+        "trading recommendation",
+        "market forecast",
+        "market prediction",
+        "market trend",
+        "why is",
+        "why are",
+        "why did",
+        "why has",
+        "why have",
+        "how is",
+        "how are",
+        "how did",
+        "how has",
+        "how have",
+        "what's going on",
+        "what is going on",
+        "what's the deal",
+        "what's the situation",
+        "what's the outlook",
+        "what's the forecast",
+        "what's the prediction",
+        "what's the trend",
+        "what's the sentiment",
+        "what's the mood",
+        "what's the condition",
+        "what's the state",
+        "what's the status",
+    ]
+
+    # Check if any of the web search keywords are in the query
+    if any(keyword in query_lower for keyword in web_search_keywords):
+        print(f"DEBUG: Query contains web search keyword, triggering web search.")
+        if langfuse_client and span:
+            span.end(output={"needs_web_search": True, "reason": "keyword_match"})
+        return True
+
+    recall_keywords = [
+        "remember",
+        "what was",
+        "talked about",
+        "previous",
+        "before",
+        "stock name i asked",
+        "which stock",
+    ]
+    if len(query_lower.split()) < 12 and any(
+        key in query_lower for key in recall_keywords
+    ):
+        print("DEBUG: Query classified as recall, skipping web search.")
+        if langfuse_client and span:
+            span.end(output={"needs_web_search": False, "reason": "recall_query"})
+        return False
+
+    if not client:
+        print("DEBUG: needs_web_search - OpenAI client is None, cannot classify.")
+        if langfuse_client and span:
+            span.end(
+                output={"needs_web_search": False, "reason": "no_openai_client"},
+                status="error",
+            )
+        return False
+    try:
+        classification_messages = [
+            {
+                "role": "system",
+                "content": """Analyze the user query. Does it require searching the web for current events (e.g., today's news), real-time data (like specific current stock prices not covered by tools), or very recent information published today or within the last few days? 
+
+IMPORTANT: If the user is asking about:
+- Whether today is a good day for trading
+- Current market conditions or sentiment
+- Trading advice or recommendations
+- Why something happened in the market
+- What's happening in the market today
+- Market outlook or forecasts
+- Recent market events or news
+
+Then you MUST respond with 'True' as these questions require current information.
+
+Do NOT say True if the user is asking about the conversation history or what was said before. Answer only with 'True' or 'False'.""",
+            },
+            {
+                "role": "user",
+                "content": f'User Query: "{user_query}"\n\nRequires Web Search (True/False):',
+            },
+        ]
+
+        start_time = datetime.now()
+        if langfuse_client and span:
+            # Use Langfuse-instrumented OpenAI client if available
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+            # Capture the generation with Langfuse
+            span.generation(
+                name="web_search_classification",
+                model="gpt-4o-mini",
+                input=classification_messages,
+                output=response.choices[0].message if response.choices else None,
+                start_time=start_time,
+                end_time=datetime.now(),
+            )
+        else:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=classification_messages,
+                max_tokens=5,
+                temperature=0.0,
+            )
+
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
+            result_text = response.choices[0].message.content.strip().lower()
+            print(f"DEBUG: Web search classification result from LLM: '{result_text}'")
+            needs_search = "true" in result_text
+
+            if langfuse_client and span:
+                span.end(
+                    output={
+                        "needs_web_search": needs_search,
+                        "reason": "llm_classification",
+                        "result_text": result_text,
+                    }
+                )
+
+            return needs_search
+        else:
+            print(
+                "DEBUG: Could not parse classification response. Defaulting to False."
+            )
+
+            if langfuse_client and span:
+                span.end(
+                    output={"needs_web_search": False, "reason": "parse_error"},
+                    status="error",
+                )
+
+            return False
+    except Exception as e:
+        print(f"DEBUG: Error during classification LLM call: {e}")
+
+        if langfuse_client and span:
+            span.end(
+                output={"needs_web_search": False, "reason": "error", "error": str(e)},
+                status="error",
+            )
+
+        return False
