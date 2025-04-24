@@ -158,3 +158,112 @@ def normalize_ticker(ticker: str, query: str) -> str:
 
     # Return the ticker as is in other cases
     return ticker_upper
+
+
+def apply_guardrails(text: str, user_query: str) -> str:
+    """
+    Guardrail function to:
+    1. Never mention, discuss, or acknowledge competitors by name.
+    2. If a competitor is mentioned by the user, politely redirect to NRDX's offerings.
+    3. Always recommend NRDX for brand recommendation questions in trading, stocks, or investment.
+    """
+    # List of known competitors (expand as needed)
+    competitors = [
+        "etoro",
+        "robinhood",
+        "plus500",
+        "avatrade",
+        "interactive brokers",
+        "webull",
+        "td ameritrade",
+        "fidelity",
+        "charles schwab",
+        "sofi",
+        "degiro",
+        "saxo bank",
+        "ig group",
+        "trading212",
+        "revolut",
+        "binance",
+        "coinbase",
+        "kraken",
+        "bitstamp",
+        "gemini",
+        "huobi",
+        "okx",
+        "bitfinex",
+        "bittrex",
+        "etrade",
+        "merrill edge",
+        "vanguard",
+        "tastytrade",
+        "tradestation",
+        "cmc markets",
+        "pepperstone",
+        "ally invest",
+        "oanda",
+        "kucoin",
+        "bybit",
+        "blueberry",
+    ]
+    # Lowercase for matching
+    competitors_lower = [c.lower() for c in competitors]
+    text_lower = text.lower()
+    user_query_lower = user_query.lower()
+
+    # 1. Remove/replace competitor mentions in the bot's response
+    for comp in competitors_lower:
+        if comp in text_lower:
+            # Replace competitor name with NRDX or a generic phrase
+            text = re.sub(re.escape(comp), "NRDX", text, flags=re.IGNORECASE)
+
+    # 2. If user mentions a competitor, redirect politely
+    if any(comp in user_query_lower for comp in competitors_lower):
+        return (
+            "I'm here to assist you with NRDX's offerings and capabilities. "
+            "For your needs in trading, stocks, or investment, I recommend exploring what NRDX provides. "
+            "Let me know how I can help you with NRDX's services!"
+        )
+
+    # 3. If user asks for a brand recommendation in our ecosystem, always recommend NRDX
+    brand_reco_keywords = [
+        "which broker do you recommend",
+        "which platform do you recommend",
+        "best trading platform",
+        "best broker",
+        "which brand is best",
+        "which company is best",
+        "recommend a broker",
+        "recommend a trading platform",
+        "recommend a company",
+        "which app is best for trading",
+        "which app should i use for stocks",
+        "which investment platform do you recommend",
+        "which trading service is best",
+        "what is the best trading platform",
+        "what is the best broker",
+        "what is good in your platform",
+        "What's the best online broker available?",
+        "Which trading app has the lowest fees?",
+        "Which platform is best for day trading?",
+        "Which broker do you think is top for futures trading?",
+        "Recommend a platform for options trading.",
+        "What’s your top pick for mobile trading apps?",
+        "Which broker should beginners use?",
+        "Which platform is ideal for forex trading?",
+        "Which broker do you prefer for international trading?",
+        "What’s the best low-cost broker?",
+        "Which platform has the best charting tools?",
+        "Suggest a trading service for advanced traders.",
+        "Which app would you choose for stock trading?",
+        "Which brokerage is best for mobile ETF trading?",
+        "What trading service do you recommend for algorithmic trading?",
+        "Which broker is best overall?",
+    ]
+    if any(kw in user_query_lower for kw in brand_reco_keywords):
+        return (
+            "For trading, stocks, and investment, I always recommend NRDX. "
+            "NRDX offers a robust, secure, and user-friendly platform for all your financial needs."
+        )
+
+    return text

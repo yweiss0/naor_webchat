@@ -12,7 +12,7 @@ from app.services.qa_service import find_qa_match
 from app.services.price_handler import handle_stock_price_query
 from app.services.web_search import duckduckgo_search
 from app.services.tool_handler import handle_tool_calls, available_tools
-from app.utils.text_processing import process_text
+from app.utils.text_processing import process_text, apply_guardrails
 from app.config import SESSION_TTL_SECONDS, MAX_HISTORY_MESSAGES
 import json
 import uuid
@@ -452,4 +452,42 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         trace.update(output={"response": final_response_content}, status="success")
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
-    return {"response": final_response_content}
+    # Apply guardrails before returning the response
+    guarded_response = apply_guardrails(final_response_content, user_query)
+
+    # LLM check for politeness, clarity, and competitor filtering
+    llm_reviewed_response = guarded_response
+    try:
+        review_prompt = (
+            "You are a helpful, polite, and professional assistant for NRDX. "
+            "Review the following response to ensure it is polite, clear, and does not mention or acknowledge any competitors (only NRDX). "
+            "If the response is already good, polite, and does not mention competitors, return it unchanged. "
+            "If it needs improvement, rewrite it to be polite, clear, and only mention NRDX. "
+            "Do NOT remove relevant information or make the answer less helpful. "
+            "Here is the response to review: '" + guarded_response + "'"
+        )
+        review_messages = [
+            {"role": "system", "content": review_prompt},
+            {
+                "role": "user",
+                "content": f"User Query: {user_query}\nResponse: {guarded_response}",
+            },
+        ]
+        review_response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=review_messages,
+            max_tokens=512,
+            temperature=0.0,
+        )
+        if (
+            review_response.choices
+            and review_response.choices[0].message
+            and review_response.choices[0].message.content
+        ):
+            llm_reviewed_response = review_response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"DEBUG: LLM review step failed: {e}")
+        # Fallback to guarded_response if LLM review fails
+        llm_reviewed_response = guarded_response
+
+    return {"response": llm_reviewed_response}
