@@ -394,19 +394,8 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         raise HTTPException(status_code=500, detail="Internal server error.")
 
     # Apply guardrails before returning the response
-    guarded_response = final_response_content
-    guardrails_span = None
-    if trace:
-        guardrails_span = trace.span(name="apply_guardrails")
     guarded_response = apply_guardrails(final_response_content, user_query)
     guardrails_applied = guarded_response != final_response_content
-    if guardrails_span:
-        guardrails_span.end(
-            output={
-                "guardrails_applied": guardrails_applied,
-                "guardrails_response": guarded_response,
-            }
-        )
 
     # LLM check for politeness, clarity, and competitor filtering
     llm_reviewed_response = guarded_response
@@ -416,9 +405,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             llm_review_span = trace.span(name="llm_guardrails_review")
         review_prompt = (
             "You are a helpful, polite, and professional assistant for NRDX. "
-            "Review the following response to ensure it is polite, clear, and does not mention or acknowledge any competitors (only NRDX). "
-            "If the response is already good, polite, and does not mention competitors, return it unchanged. "
-            "If it needs improvement, rewrite it to be polite, clear, and only mention NRDX. "
+            "Review the following response to ensure it is polite, clear, and ONLY mentions NRDX as the platform or brand. "
+            "The answer must not imply, suggest, or hint that there are other brands, platforms, or options available, nor that any names were omitted or replaced. "
+            "Rewrite the answer if needed so that it presents NRDX as the sole recommended and discussed platform, with no reference to other options, even implicitly. "
+            "If the response is already good and only mentions NRDX, return it unchanged. "
             "Do NOT remove relevant information or make the answer less helpful. "
             "Here is the response to review: '" + guarded_response + "'"
         )
