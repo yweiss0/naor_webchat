@@ -453,11 +453,25 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
     # Apply guardrails before returning the response
+    guarded_response = final_response_content
+    guardrails_span = None
+    if trace:
+        guardrails_span = trace.span(name="apply_guardrails")
     guarded_response = apply_guardrails(final_response_content, user_query)
+    if guardrails_span:
+        guardrails_span.end(
+            output={
+                "guardrails_applied": guarded_response != final_response_content,
+                "guardrails_response": guarded_response,
+            }
+        )
 
     # LLM check for politeness, clarity, and competitor filtering
     llm_reviewed_response = guarded_response
     try:
+        llm_review_span = None
+        if trace:
+            llm_review_span = trace.span(name="llm_guardrails_review")
         review_prompt = (
             "You are a helpful, polite, and professional assistant for NRDX. "
             "Review the following response to ensure it is polite, clear, and does not mention or acknowledge any competitors (only NRDX). "
@@ -485,9 +499,14 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             and review_response.choices[0].message.content
         ):
             llm_reviewed_response = review_response.choices[0].message.content.strip()
+        if llm_review_span:
+            llm_review_span.end(output={"llm_reviewed_response": llm_reviewed_response})
     except Exception as e:
         print(f"DEBUG: LLM review step failed: {e}")
         # Fallback to guarded_response if LLM review fails
         llm_reviewed_response = guarded_response
 
+    # Update the main trace output with the final response
+    if trace:
+        trace.update(output={"response": llm_reviewed_response}, status="success")
     return {"response": llm_reviewed_response}
