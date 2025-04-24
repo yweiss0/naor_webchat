@@ -142,10 +142,13 @@ async def is_stock_price_query(
     client: Optional[OpenAI],
     langfuse_client: Optional[Langfuse] = None,
     parent_span: Any = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[bool, str, bool]:
     """
     Determines if the query is specifically about current stock price and extracts the ticker.
     Returns a tuple of (is_price_query, ticker_symbol_or_empty_string, needs_market_context)
+
+    Now handles follow-up questions by analyzing conversation history if provided.
     """
     # Quick check for gold-related terms
     query_lower = user_query.lower()
@@ -161,6 +164,112 @@ async def is_stock_price_query(
     ):
         print("Direct gold price query detected, automatically classifying")
         return (True, "GOLD", False)
+
+    # Check if this is a follow-up question about a previously mentioned stock
+    if conversation_history:
+        try:
+            # Analyze if this is a follow-up and extract the ticker from previous messages
+            follow_up_messages = [
+                {
+                    "role": "system",
+                    "content": """Analyze the conversation history and the user's latest query. 
+                    Determine if the latest query is a follow-up question about a stock/asset price mentioned earlier in the conversation.
+                    
+                    If it is a follow-up about price (e.g., "what was its price on [date]?", "how much was it yesterday?"), 
+                    extract the ticker symbol from the conversation history.
+                    
+                    Respond in JSON format:
+                    {"is_followup_price_query": true/false, "ticker": "SYMBOL", "needs_market_context": true/false}
+                    
+                    Set "needs_market_context" to true if the query asks about:
+                    - Price changes or movements
+                    - Reasons for price changes
+                    - Trends or patterns
+                    - Comparisons
+                    """,
+                },
+            ]
+
+            # Add conversation history
+            for msg in conversation_history:
+                follow_up_messages.append(
+                    {"role": msg["role"], "content": msg["content"]}
+                )
+
+            # Add current query
+            follow_up_messages.append({"role": "user", "content": user_query})
+
+            # Create a span for this follow-up analysis if Langfuse is available
+            followup_span = None
+            if langfuse_client and parent_span:
+                followup_span = parent_span.span(
+                    name="analyze_price_followup",
+                    input={
+                        "query": user_query,
+                        "history_length": len(conversation_history),
+                    },
+                )
+
+            # Use regular OpenAI client without tracing the generation
+            followup_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=follow_up_messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+
+            # Parse the response
+            if (
+                followup_response.choices
+                and followup_response.choices[0].message
+                and followup_response.choices[0].message.content
+            ):
+                result_text = followup_response.choices[0].message.content.strip()
+                try:
+                    result_json = json.loads(result_text)
+                    is_followup = result_json.get("is_followup_price_query", False)
+                    ticker = result_json.get("ticker", "").strip().upper()
+                    needs_market_context = result_json.get(
+                        "needs_market_context", False
+                    )
+
+                    if is_followup and ticker:
+                        print(f"Detected follow-up price query for ticker: {ticker}")
+
+                        if followup_span:
+                            followup_span.end(
+                                output={
+                                    "is_followup_price_query": is_followup,
+                                    "ticker": ticker,
+                                    "needs_market_context": needs_market_context,
+                                }
+                            )
+
+                        return (True, ticker, needs_market_context)
+
+                    if followup_span:
+                        followup_span.end(
+                            output={
+                                "is_followup_price_query": is_followup,
+                                "ticker": ticker,
+                                "needs_market_context": needs_market_context,
+                            }
+                        )
+
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Could not parse follow-up JSON response: {e}")
+                    if followup_span:
+                        followup_span.end(
+                            output={"error": str(e)},
+                            status="error",
+                        )
+        except Exception as e:
+            print(f"Error during follow-up analysis: {e}")
+            if "followup_span" in locals() and followup_span:
+                followup_span.end(
+                    output={"error": str(e)},
+                    status="error",
+                )
 
     if not client:
         print("OpenAI client not available for stock price query classification.")
@@ -282,9 +391,11 @@ async def needs_web_search(
     client: Optional[OpenAI],
     langfuse_client: Optional[Langfuse] = None,
     parent_span: Any = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """
     Determines if the query requires web search for up-to-date information.
+    Also handles follow-up questions by checking conversation history.
     """
     print(f"Classifying web search need for: '{user_query}'")
     query_lower = user_query.lower()
@@ -296,6 +407,83 @@ async def needs_web_search(
             name="needs_web_search",
             input={"query": user_query},
         )
+
+    # Check if this is a follow-up about stock price first
+    if conversation_history and len(conversation_history) > 0:
+        try:
+            # Check for common follow-up patterns about prices
+            price_followup_indicators = [
+                "price",
+                "cost",
+                "worth",
+                "value",
+                "was it",
+                "was the",
+                "what was",
+                "how much",
+                "how was",
+            ]
+
+            date_indicators = [
+                "yesterday",
+                "last week",
+                "last month",
+                "at that time",
+                "that day",
+                "that time",
+                "on that date",
+                "back then",
+                "previous",
+                "earlier",
+                "before",
+                "prior",
+            ]
+
+            # If it looks like a price follow-up with a date, likely doesn't need web search
+            if any(pi in query_lower for pi in price_followup_indicators) and any(
+                di in query_lower for di in date_indicators
+            ):
+                print(
+                    "DEBUG: Query appears to be a follow-up about historical price, skipping web search."
+                )
+                if langfuse_client and span:
+                    span.end(
+                        output={
+                            "needs_web_search": False,
+                            "reason": "historical_price_followup",
+                        }
+                    )
+                return False
+
+            # For short queries that are likely follow-ups about prices
+            if len(query_lower.split()) <= 10 and any(
+                pi in query_lower for pi in price_followup_indicators
+            ):
+                # Inspect the last few messages to see if they were about a specific stock
+                for i in range(
+                    len(conversation_history) - 1,
+                    max(0, len(conversation_history) - 6),
+                    -1,
+                ):
+                    last_msg = conversation_history[i]
+                    if last_msg.get("role") == "assistant" and any(
+                        term in last_msg.get("content", "").lower()
+                        for term in ["price", "stock", "ticker", "$", "usd"]
+                    ):
+                        print(
+                            "DEBUG: Recent messages were about stock prices, this is likely a follow-up."
+                        )
+                        if langfuse_client and span:
+                            span.end(
+                                output={
+                                    "needs_web_search": False,
+                                    "reason": "price_followup_context",
+                                }
+                            )
+                        return False
+        except Exception as e:
+            print(f"DEBUG: Error checking for follow-up about price: {e}")
+            # Continue with normal classification if error
 
     # Check for specific keywords that should always trigger web search
     web_search_keywords = [

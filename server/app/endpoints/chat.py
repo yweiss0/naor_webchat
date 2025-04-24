@@ -198,7 +198,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
             # First check if this is a direct stock price query
             is_price_query, ticker, needs_market_context = await is_stock_price_query(
-                user_query, client, langfuse_client, trace
+                user_query,
+                client,
+                langfuse_client,
+                trace,
+                conversation_history=loaded_history if loaded_history else None,
             )
 
             if is_price_query and ticker:
@@ -227,7 +231,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             else:
                 # Continue with the original flow - check if web search is needed
                 search_needed = await needs_web_search(
-                    user_query, client, langfuse_client, trace
+                    user_query,
+                    client,
+                    langfuse_client,
+                    trace,
+                    conversation_history=loaded_history if loaded_history else None,
                 )
                 system_prompt = (
                     "You are a financial assistant specializing in stocks, cryptocurrency, and trading. "
