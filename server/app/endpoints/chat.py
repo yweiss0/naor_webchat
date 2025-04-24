@@ -12,11 +12,7 @@ from app.services.qa_service import find_qa_match
 from app.services.price_handler import handle_stock_price_query
 from app.services.web_search import duckduckgo_search
 from app.services.tool_handler import handle_tool_calls, available_tools
-from app.utils.text_processing import (
-    process_text,
-    apply_guardrails,
-    resolve_stock_coreference,
-)
+from app.utils.text_processing import process_text, apply_guardrails
 from app.config import SESSION_TTL_SECONDS, MAX_HISTORY_MESSAGES
 import json
 import uuid
@@ -42,8 +38,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     user_query = query.message
     session_id = request.cookies.get("chatbotSessionId")
     loaded_history = []
-    # Preprocess user_query to resolve stock coreferences using conversation history
-    user_query = resolve_stock_coreference(user_query, loaded_history)
     is_new_session = False
 
     # Start a Langfuse trace for the entire request
