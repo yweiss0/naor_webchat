@@ -40,10 +40,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
         print("DEBUG: WARNING - Redis connection is NOT available for this request!")
 
     user_query = query.message
-    # Preprocess user_query to resolve stock coreferences using conversation history
-    user_query = resolve_stock_coreference(user_query, loaded_history)
     session_id = request.cookies.get("chatbotSessionId")
     loaded_history = []
+    # Preprocess user_query to resolve stock coreferences using conversation history
+    user_query = resolve_stock_coreference(user_query, loaded_history)
     is_new_session = False
 
     # Start a Langfuse trace for the entire request
