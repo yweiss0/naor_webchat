@@ -234,6 +234,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                     "Use the conversation history provided. You must provide very clear and explicit answers in USD. "
                     "If the user asks for a recommendation, give a direct 'You should...' statement. Use provided tools when necessary. "
                     "Ensure all prices are presented in USD. "
+                    "Always interpret and present dates in European format (day before month, e.g., DD-MM-YYYY). If the date is ambiguous, ask the user for clarification. "
                     "If the user refers back to previous turns in the conversation (for example, by using pronouns like 'it', 'its', 'her', or 'his'), resolve those pronouns to the most relevant entity from the previous conversation turns (such as a stock, company, or asset). "
                     "If the reference is ambiguous, ask the user for clarification."
                 )
