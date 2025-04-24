@@ -393,8 +393,74 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
         raise HTTPException(status_code=500, detail="Internal server error.")
 
+    # Apply guardrails before returning the response
+    guarded_response = final_response_content
+    guardrails_span = None
+    if trace:
+        guardrails_span = trace.span(name="apply_guardrails")
+    guarded_response = apply_guardrails(final_response_content, user_query)
+    guardrails_applied = guarded_response != final_response_content
+    if guardrails_span:
+        guardrails_span.end(
+            output={
+                "guardrails_applied": guardrails_applied,
+                "guardrails_response": guarded_response,
+            }
+        )
+
+    # LLM check for politeness, clarity, and competitor filtering
+    llm_reviewed_response = guarded_response
+    try:
+        llm_review_span = None
+        if trace:
+            llm_review_span = trace.span(name="llm_guardrails_review")
+        review_prompt = (
+            "You are a helpful, polite, and professional assistant for NRDX. "
+            "Review the following response to ensure it is polite, clear, and does not mention or acknowledge any competitors (only NRDX). "
+            "If the response is already good, polite, and does not mention competitors, return it unchanged. "
+            "If it needs improvement, rewrite it to be polite, clear, and only mention NRDX. "
+            "Do NOT remove relevant information or make the answer less helpful. "
+            "Here is the response to review: '" + guarded_response + "'"
+        )
+        review_messages = [
+            {"role": "system", "content": review_prompt},
+            {
+                "role": "user",
+                "content": f"User Query: {user_query}\nResponse: {guarded_response}",
+            },
+        ]
+        review_response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=review_messages,
+            max_tokens=512,
+            temperature=0.0,
+        )
+        if (
+            review_response.choices
+            and review_response.choices[0].message
+            and review_response.choices[0].message.content
+        ):
+            llm_reviewed_response = review_response.choices[0].message.content.strip()
+        if llm_review_span:
+            llm_review_span.end(
+                output={
+                    "guardrails_applied": guardrails_applied,
+                    "original_message": final_response_content,
+                    "guardrails_response": guarded_response,
+                    "llm_reviewed_response": llm_reviewed_response,
+                }
+            )
+    except Exception as e:
+        print(f"DEBUG: LLM review step failed: {e}")
+        # Fallback to guarded_response if LLM review fails
+        llm_reviewed_response = guarded_response
+
+    # Update the main trace output with the final response
+    if trace:
+        trace.update(output={"response": llm_reviewed_response}, status="success")
+
     # --- Save History ---
-    if redis_conn and session_id and raw_ai_response:
+    if redis_conn and session_id and llm_reviewed_response:
         try:
             history_save_span = None
             if trace:
@@ -402,7 +468,7 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
             new_history_entry = [
                 current_user_message_dict,
-                {"role": "assistant", "content": raw_ai_response},
+                {"role": "assistant", "content": llm_reviewed_response},
             ]
             updated_history = loaded_history + new_history_entry
             if len(updated_history) > MAX_HISTORY_MESSAGES:
@@ -448,65 +514,5 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                 name="session_cookie_set", output={"session_id": session_id}
             )
 
-    if trace:
-        trace.update(output={"response": final_response_content}, status="success")
-
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
-    # Apply guardrails before returning the response
-    guarded_response = final_response_content
-    guardrails_span = None
-    if trace:
-        guardrails_span = trace.span(name="apply_guardrails")
-    guarded_response = apply_guardrails(final_response_content, user_query)
-    if guardrails_span:
-        guardrails_span.end(
-            output={
-                "guardrails_applied": guarded_response != final_response_content,
-                "guardrails_response": guarded_response,
-            }
-        )
-
-    # LLM check for politeness, clarity, and competitor filtering
-    llm_reviewed_response = guarded_response
-    try:
-        llm_review_span = None
-        if trace:
-            llm_review_span = trace.span(name="llm_guardrails_review")
-        review_prompt = (
-            "You are a helpful, polite, and professional assistant for NRDX. "
-            "Review the following response to ensure it is polite, clear, and does not mention or acknowledge any competitors (only NRDX). "
-            "If the response is already good, polite, and does not mention competitors, return it unchanged. "
-            "If it needs improvement, rewrite it to be polite, clear, and only mention NRDX. "
-            "Do NOT remove relevant information or make the answer less helpful. "
-            "Here is the response to review: '" + guarded_response + "'"
-        )
-        review_messages = [
-            {"role": "system", "content": review_prompt},
-            {
-                "role": "user",
-                "content": f"User Query: {user_query}\nResponse: {guarded_response}",
-            },
-        ]
-        review_response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=review_messages,
-            max_tokens=512,
-            temperature=0.0,
-        )
-        if (
-            review_response.choices
-            and review_response.choices[0].message
-            and review_response.choices[0].message.content
-        ):
-            llm_reviewed_response = review_response.choices[0].message.content.strip()
-        if llm_review_span:
-            llm_review_span.end(output={"llm_reviewed_response": llm_reviewed_response})
-    except Exception as e:
-        print(f"DEBUG: LLM review step failed: {e}")
-        # Fallback to guarded_response if LLM review fails
-        llm_reviewed_response = guarded_response
-
-    # Update the main trace output with the final response
-    if trace:
-        trace.update(output={"response": llm_reviewed_response}, status="success")
     return {"response": llm_reviewed_response}
