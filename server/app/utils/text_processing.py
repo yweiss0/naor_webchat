@@ -205,6 +205,9 @@ def apply_guardrails(text: str, user_query: str) -> str:
         "kucoin",
         "bybit",
         "blueberry",
+        "e*trade",
+        "E*TRADE",
+        "e8trade",
     ]
     # Lowercase for matching
     competitors_lower = [c.lower() for c in competitors]
