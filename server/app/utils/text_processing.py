@@ -248,11 +248,11 @@ def apply_guardrails(text: str, user_query: str) -> str:
         "Which platform is best for day trading?",
         "Which broker do you think is top for futures trading?",
         "Recommend a platform for options trading.",
-        "What’s your top pick for mobile trading apps?",
+        "What's your top pick for mobile trading apps?",
         "Which broker should beginners use?",
         "Which platform is ideal for forex trading?",
         "Which broker do you prefer for international trading?",
-        "What’s the best low-cost broker?",
+        "What's the best low-cost broker?",
         "Which platform has the best charting tools?",
         "Suggest a trading service for advanced traders.",
         "Which app would you choose for stock trading?",
@@ -267,3 +267,43 @@ def apply_guardrails(text: str, user_query: str) -> str:
         )
 
     return text
+
+
+def resolve_stock_coreference(user_query: str, history: list) -> str:
+    """
+    Resolves pronouns like 'it', 'its', 'the stock' in the user_query to the last mentioned stock/company/ticker
+    from the conversation history, but only if the context is unambiguous and the query is likely about a stock price.
+    """
+    # Only attempt to resolve if the query contains a pronoun and is likely about a price/stock
+    pronouns = [r"\bit\b", r"\bits\b", r"\bthe stock\b", r"\bthe company\b"]
+    price_keywords = ["price", "stock", "share", "value", "quote"]
+    user_query_lower = user_query.lower()
+    if not any(re.search(p, user_query_lower) for p in pronouns):
+        return user_query  # No pronoun to resolve
+    if not any(kw in user_query_lower for kw in price_keywords):
+        return user_query  # Not a price/stock-related query
+
+    # Search history backwards for last assistant message mentioning a stock/ticker
+    last_entity = None
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            # Try to extract ticker in parentheses, e.g., Tesla (TSLA)
+            match = re.search(r"([A-Z]{1,5})\)", msg.get("content", ""))
+            if match:
+                last_entity = match.group(1)
+                break
+            # Try to extract company name (capitalized word(s) before ticker)
+            match2 = re.search(
+                r"([A-Z][a-zA-Z0-9&\- ]+) \([A-Z]{1,5}\)", msg.get("content", "")
+            )
+            if match2:
+                last_entity = match2.group(1).strip()
+                break
+    if not last_entity:
+        return user_query  # No clear entity found
+
+    # Replace pronouns with the last entity (ticker or company name)
+    resolved_query = user_query
+    for p in pronouns:
+        resolved_query = re.sub(p, last_entity, resolved_query, flags=re.IGNORECASE)
+    return resolved_query
