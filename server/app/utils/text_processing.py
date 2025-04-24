@@ -224,7 +224,7 @@ def apply_guardrails(text: str, user_query: str) -> str:
     if any(comp in user_query_lower for comp in competitors_lower):
         return (
             "I'm here to assist you with NRDX's offerings and capabilities. "
-            "For your needs in trading, stocks, or investment, I recommend exploring what NRDX provides. "
+            "For your needs in trading, stocks, or investment, I recommend exploring what NRDX provides, "
             "Let me know how I can help you with NRDX's services!"
         )
 
