@@ -434,10 +434,6 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     llm_reviewed_response = guarded_response
     try:
         llm_review_span = None
-        if trace:
-            llm_review_span = trace.span(
-                name="llm_guardrails_review", input={"review_prompt": review_prompt}
-            )
         review_prompt = (
             "You are a helpful, polite, and professional assistant for NRDX. "
             "Review the following response to ensure it is polite, clear, and ONLY mentions NRDX as the platform or brand. "
@@ -447,6 +443,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
             "Do NOT remove relevant information or make the answer less helpful. "
             "Here is the response to review: '" + guarded_response + "'"
         )
+        if trace:
+            llm_review_span = trace.span(
+                name="llm_guardrails_review", input={"review_prompt": review_prompt}
+            )
         review_messages = [
             {"role": "system", "content": review_prompt},
             {
