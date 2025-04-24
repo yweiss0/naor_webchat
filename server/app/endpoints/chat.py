@@ -18,6 +18,7 @@ import json
 import uuid
 import traceback
 from datetime import datetime
+from typing import Any
 
 router = APIRouter()
 
@@ -223,6 +224,15 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         langfuse_client,
                         trace,
                     )
+                    # If the query is asking for reasons, also do a web search and combine
+                    if is_reason_query(user_query):
+                        print(
+                            "DEBUG: Query is a reason/explanation query, adding web search for reasons..."
+                        )
+                        reason_search = duckduckgo_search(
+                            f"{user_query} market reasons news in USD on {datetime.now():%B %d, %Y}"
+                        )
+                        raw_ai_response = f"{raw_ai_response}\n\n---\nAdditional recent reasons from the web:\n{reason_search}"
                     final_response_content = process_text(raw_ai_response)
                     print(
                         f"DEBUG: Returning formatted stock price response: {final_response_content}"
@@ -541,3 +551,11 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
     print(f"--- Request End (Session: {session_id[-6:] if session_id else 'NEW'}) ---")
     return {"response": llm_reviewed_response}
+
+
+def is_reason_query(query: str) -> bool:
+    """
+    Returns True if the query is asking for reasons (contains 'why' or 'reason').
+    """
+    q = query.lower()
+    return ("why" in q) or ("reason" in q)
