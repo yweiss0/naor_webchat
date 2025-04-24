@@ -41,6 +41,10 @@ async def chat(query: QueryRequest, request: Request, response: Response):
     loaded_history = []
     is_new_session = False
 
+    # Track if a web search was used for synthesis
+    web_search_used = False
+    web_search_result = ""
+
     # Start a Langfuse trace for the entire request
     trace = None
     if langfuse_client:
@@ -229,10 +233,23 @@ async def chat(query: QueryRequest, request: Request, response: Response):
                         print(
                             "DEBUG: Query is a reason/explanation query, adding web search for reasons..."
                         )
-                        reason_search = duckduckgo_search(
-                            f"{user_query} market reasons news in USD on {datetime.now():%B %d, %Y}"
-                        )
-                        raw_ai_response = f"{raw_ai_response}\n\n---\nAdditional recent reasons from the web:\n{reason_search}"
+                        web_search_used = True
+                        if trace:
+                            web_search_span = trace.span(name="web_search_for_reason")
+                            web_search_result = duckduckgo_search(
+                                f"{user_query} market reasons news in USD on {datetime.now():%B %d, %Y}"
+                            )
+                            web_search_span.end(
+                                output={
+                                    "query": user_query,
+                                    "result_snippet": web_search_result[:200],
+                                }
+                            )
+                        else:
+                            web_search_result = duckduckgo_search(
+                                f"{user_query} market reasons news in USD on {datetime.now():%B %d, %Y}"
+                            )
+                        raw_ai_response = f"{raw_ai_response}\n\n---\nAdditional recent reasons from the web:\n{web_search_result}"
                     final_response_content = process_text(raw_ai_response)
                     print(
                         f"DEBUG: Returning formatted stock price response: {final_response_content}"
@@ -436,7 +453,55 @@ async def chat(query: QueryRequest, request: Request, response: Response):
 
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-    # Apply guardrails before returning the response
+    # If web search was used, synthesize tool and web search results with LLM before guardrails
+    if web_search_used and web_search_result:
+        print(
+            "DEBUG: Synthesizing tool and web search results with LLM before guardrails..."
+        )
+        synthesis_prompt = (
+            "You are a helpful, polite, and professional assistant. "
+            "Combine the following financial data and recent web search results into a single, clear, and helpful answer for the user. "
+            "Base your answer specifically on the user's question. Do not copy-paste, but synthesize in your own words.\n\n"
+            f"User question: {user_query}\n\nFinancial data:\n{final_response_content}\n\nRecent web search results:\n{web_search_result}\n"
+        )
+        synthesis_messages = [
+            {"role": "system", "content": synthesis_prompt},
+        ]
+        if trace:
+            synthesis_span = trace.span(
+                name="llm_synthesis_tool_and_websearch",
+                input={
+                    "user_query": user_query,
+                    "tool_data": final_response_content,
+                    "web_search": web_search_result[:200],
+                },
+            )
+        try:
+            synthesis_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=synthesis_messages,
+                max_tokens=512,
+                temperature=0.2,
+            )
+            if (
+                synthesis_response.choices
+                and synthesis_response.choices[0].message
+                and synthesis_response.choices[0].message.content
+            ):
+                final_response_content = synthesis_response.choices[
+                    0
+                ].message.content.strip()
+            if trace:
+                synthesis_span.end(
+                    output={"synthesized_answer": final_response_content}
+                )
+        except Exception as e:
+            print(f"DEBUG: LLM synthesis step failed: {e}")
+            if trace:
+                synthesis_span.end(output={"error": str(e)}, status="error")
+            # fallback: keep original final_response_content
+
+    # Now apply guardrails before returning the response
     guarded_response = apply_guardrails(final_response_content, user_query)
     guardrails_applied = guarded_response != final_response_content
 
