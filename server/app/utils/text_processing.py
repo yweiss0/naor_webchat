@@ -3,13 +3,26 @@ import re
 
 def process_text(text: str) -> str:
     """
-    Clean up text by removing code blocks markers and ensuring it ends with punctuation.
+    Clean up text by removing code blocks markers, ensuring it ends with punctuation,
+    and making URLs and email addresses clickable.
     """
+    # Remove code block markers
     text = re.sub(r"```(json)?\s*", "", text)
     text = re.sub(r"\s*```", "", text)
+
+    # Make URLs clickable (http, https)
+    url_pattern = r'(https?://[^\s\'"<>]+)'
+    text = re.sub(url_pattern, r'<a href="\1" target="_blank">\1</a>', text)
+
+    # Make email addresses clickable
+    email_pattern = r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"
+    text = re.sub(email_pattern, r'<a href="mailto:\1">\1</a>', text)
+
+    # Ensure text ends with punctuation
     text_stripped = text.strip()
     if text_stripped and text_stripped[-1] not in ".!?":
         text_stripped += "."
+
     return text_stripped
 
 
@@ -251,11 +264,11 @@ def apply_guardrails(text: str, user_query: str) -> str:
         "Which platform is best for day trading?",
         "Which broker do you think is top for futures trading?",
         "Recommend a platform for options trading.",
-        "What’s your top pick for mobile trading apps?",
+        "What's your top pick for mobile trading apps?",
         "Which broker should beginners use?",
         "Which platform is ideal for forex trading?",
         "Which broker do you prefer for international trading?",
-        "What’s the best low-cost broker?",
+        "What's the best low-cost broker?",
         "Which platform has the best charting tools?",
         "Suggest a trading service for advanced traders.",
         "Which app would you choose for stock trading?",
