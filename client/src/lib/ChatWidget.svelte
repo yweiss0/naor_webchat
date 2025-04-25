@@ -165,10 +165,10 @@
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
           // Convert italic (*text*)
           .replace(/\*(.*?)\*/g, '<em>$1</em>')
-          // Style links with white color for better visibility
-          .replace(/<a href="(https?:\/\/[^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="$1"$2 style="color: white; text-decoration: underline;">$3</a>')
-          // Style email links with white color for better visibility
-          .replace(/<a href="mailto:([^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="mailto:$1"$2 style="color: white; text-decoration: underline;">$3</a>')
+          // Style links with same color as text (#CCFF00) for consistency
+          .replace(/<a href="(https?:\/\/[^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="$1"$2 style="color: #CCFF00; text-decoration: underline;">$3</a>')
+          // Style email links with same color as text (#CCFF00) for consistency
+          .replace(/<a href="mailto:([^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="mailto:$1"$2 style="color: #CCFF00; text-decoration: underline;">$3</a>')
           // Convert newlines to paragraphs
           .split('\n\n').map(paragraph => 
               `<p>${paragraph.replace(/\n/g, '<br>')}</p>`
