@@ -165,6 +165,10 @@
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
           // Convert italic (*text*)
           .replace(/\*(.*?)\*/g, '<em>$1</em>')
+          // Style links with white color for better visibility
+          .replace(/<a href="(https?:\/\/[^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="$1"$2 style="color: white; text-decoration: underline;">$3</a>')
+          // Style email links with white color for better visibility
+          .replace(/<a href="mailto:([^"]+)"([^>]*)>(.*?)<\/a>/g, '<a href="mailto:$1"$2 style="color: white; text-decoration: underline;">$3</a>')
           // Convert newlines to paragraphs
           .split('\n\n').map(paragraph => 
               `<p>${paragraph.replace(/\n/g, '<br>')}</p>`
@@ -265,7 +269,7 @@
                       {message.content}
                   </div>
               {:else}
-                  <div class="text-left">
+                  <div class="text-left text-[#CCFF00] overflow-wrap-anywhere">
                       {@html formatResponse(message.content)}
                   </div>
               {/if}
@@ -303,4 +307,10 @@
   @import 'tailwindcss/base';
   @import 'tailwindcss/components';
   @import 'tailwindcss/utilities';
+  
+  /* Add custom style for text wrapping */
+  .overflow-wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 </style>
