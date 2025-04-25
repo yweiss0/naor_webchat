@@ -159,7 +159,7 @@ async def process_chat_request(
                                 "market_context_needed": needs_market_context,
                             },
                         )
-                    early_exit = True
+                    early_exit = False
                 else:
                     # Continue with the original flow - check if web search is needed
                     search_needed = await needs_web_search(
