@@ -132,7 +132,7 @@
       };
       messages = [...messages, aiMessage];
       typingMessageId = aiMessage.id;
-      await typeMessage("Hi there! I'm Nixi, your trading assistant.\n Need market insights, stock updates, or strategy tips? I've got you covered! What's on your mind today? \n\n The information provided by this AI bot is for general informational and educational purposes only. It does not constitute investment advice, a personal recommendation, or an offer or solicitation to buy or sell any financial instruments. Please refer to the Terms & Conditions <a href='https://www.nrdx.com/wp-content/uploads/NRDX_TCs_final.pdf'>https://www.nrdx.com/terms&conditions</a> available on our website.", aiMessage.id);}
+      await typeMessage("Hi there! I'm Nixi, your trading assistant.\n Need market insights, stock updates, or strategy tips? I've got you covered! What's on your mind today? \n\n The information provided by this AI bot is for general informational and educational purposes only. It does not constitute investment advice, a personal recommendation, or an offer or solicitation to buy or sell any financial instruments. Please refer to the Terms & Conditions <a href='https://www.nrdx.com/wp-content/uploads/NRDX_TCs_final.pdf' style='color: #CCFF00; text-decoration: underline;'>(https://www.nrdx.com/terms&conditions)</a> available on our website.", aiMessage.id);}
 
   function handleKeyPress(event) {
       if (event.key === 'Enter' && !event.shiftKey) {
